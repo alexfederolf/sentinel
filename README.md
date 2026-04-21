@@ -41,7 +41,7 @@ data/raw/
 
 ## Running the Notebooks
 
-Run in order — each notebook saves outputs that the next one loads:
+Run in this order, each notebook saves outputs that the next one loads:
 
 | # | Notebook | Description |
 |---|---|---|

@@ -1,10 +1,10 @@
 """
-Corrected event-wise F-score — ESA Anomaly Detection Benchmark.
+Corrected event-wise F0.5-score
 
-Source: https://github.com/kplabs-pl/ESA-ADB
-        timeeval/metrics/ESA_ADB_metrics.py
+Source: ESA Anomaly Detection Benchmark
+https://github.com/kplabs-pl/ESA-ADB/timeeval/metrics/ESA_ADB_metrics.py
 
-Formula (Kotowski et al., 2024 / Sehili et al., 2023):
+Formula
 ────────────────────────────────────────────────────────
   Re_e   = TP_events / (TP_events + FN_events)
               TP_events  = true anomaly segments with ≥ 1 predicted positive
@@ -48,7 +48,7 @@ def corrected_event_f05(
     beta: float = 0.5,
 ) -> dict:
     """
-    Compute the corrected event-wise F-beta score matching the ESA-ADB framework.
+    Compute the corrected event-wise F-beta score.
 
     Parameters
     ----------
