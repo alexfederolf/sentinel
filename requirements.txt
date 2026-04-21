@@ -1,19 +1,17 @@
-# data science
-numpy<2.0.0
-pandas==2.2.3
+# ESA-ADB Anomaly Detection — pinned dependencies
+# ML stack
+scikit-learn==1.7.2
 
-# Uncomment if you use sklearn
-# scikit-learn==1.6.1
+# Data & numerics
+numpy~=1.26
+pandas~=2.3
+pyarrow~=19.0
+scipy~=1.15
 
-# Install the correct TensorFlow version
-# Uncomment if you use TensorFlow
-# tensorflow==2.16.2    # For both Intel and Apple silicon
-# keras==3.8.0
+# Visualisation
+matplotlib~=3.10
+seaborn~=0.13
 
-# Google Cloud
-# Uncomment if you use Google Cloud Storage
-# google-cloud-storage
-
-# API
-fastapi
-uvicorn
+# Notebook & dev tools
+jupyter~=1.1
+pytest~=8.3
