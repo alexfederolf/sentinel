@@ -6,7 +6,7 @@ install_requirements:
 	@pip install -r requirements.txt
 
 install:
-	@pip install . -U
+	@pip install -e . -U
 
 clean:
 	@rm -f */version.txt
@@ -15,9 +15,25 @@ clean:
 	@rm -fr build dist
 	@rm -fr proj-*.dist-info
 	@rm -fr proj.egg-info
+	@rm -fr src/sentinel.egg-info
 
-test_structure:
-	@bash tests/test_structure.sh
+test:
+	pytest tests -v
+
+#======================#
+#   SENTINEL pipeline  #
+#======================#
+
+run_preprocess:
+	python -m sentinel.main preprocess
+
+run_train:
+	python -m sentinel.main train
+
+run_predict:
+	python -m sentinel.main predict
+
+run_all: run_preprocess run_train run_predict
 
 #======================#
 #          API         #

@@ -57,3 +57,6 @@ results/
 .env.yaml
 .credentials
 secrets.toml
+
+# ── Saved Keras models ────────────────────────────────────────────────────────
+models/*.keras

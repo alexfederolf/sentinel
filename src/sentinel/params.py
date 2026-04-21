@@ -21,6 +21,10 @@ PCA_FIT_SAMPLES     =  50_000  # training windows used to fit PCA
 SCORE_BATCH         = 500_000  # rows scored per batch during inference
 CV_FOLDS            = 5        # folds for temporal cross-validation
 
+# ── LSTM Autoencoder hyperparameters ─────────────────────────────────────────
+LATENT_DIM    = 64             # LSTM bottleneck dimension
+HIDDEN_DIM    = 128            # LSTM encoder/decoder hidden dimension
+
 # ── Plot colours (consistent across all notebooks) ────────────────────────────
 ANOMALY_COLOR = '#e74c3c'
 NOMINAL_COLOR = '#2980b9'
