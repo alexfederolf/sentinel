@@ -38,6 +38,7 @@ data/processed/
 
 
 # ── Saved models ─────────────────────────────────────────────────────────────
+#models/*.keras
 #models/*.pkl
 #models/*.json
 #models/*.h5
@@ -55,9 +56,6 @@ results/
 .env.yaml
 .credentials
 secrets.toml
-
-# ── Saved Keras models ────────────────────────────────────────────────────────
-models/*.keras
 
 
 scripts/
