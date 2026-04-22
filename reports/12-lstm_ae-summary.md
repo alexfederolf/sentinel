@@ -27,47 +27,64 @@ Model artifact: `models/lstm_ae_bootcamp.keras`
 
 ## Scoring
 
+Scoring uses `score_windows(..., topk=5)` — per-window MSE is the mean of the
+**5 worst-reconstructed channels** (out of 58) instead of the mean over all
+channels. Anomalies tend to affect only a handful of channels; averaging over all
+58 dilutes the signal.
+
 | Split | Rows | Time | Score range |
 |---|---:|---:|---|
-| Validation | 2,232,277 | 5.5 s | `[0.6878, 0.9665]` |
-| Test_intern | 2,186,220 | 3.9 s | `[0.7053, 0.9875]` |
+| Validation | 2,232,277 | 5.2 s | `[1.0013, 2.4233]` |
+| Test_intern | 2,186,220 | 3.6 s | `[1.0029, 1.6810]` |
 
-Score range is **very narrow** — the model reconstructs nominal and anomalous windows almost equally well, so MSE residuals barely separate classes.
+Dynamic range: **2.4×** on val (vs ~1.4× with mean-over-all-58) — topk successfully sharpens the anomaly signal in LSTM space.
 
 ## Threshold tuning
 
-- Best threshold: `0.829141`
-- Val event-F0.5 at best threshold: **0.0565**
+- Best threshold: `1.191029`
+- Val event-F0.5 at best threshold: **0.2475**
 
 ## Test_intern results (5 metrics)
 
 | Metric | Value |
 |---|---:|
-| Event F0.5 | **0.0733** |
-| Event recall | 0.6296 |
-| Event precision | 0.0601 |
-| ESA corrected F0.5 | 0.0721 |
-| Row F1 | 0.0343 |
+| Event F0.5 | **0.2650** |
+| Event recall | 0.5556 |
+| Event precision | 0.2344 |
+| ESA corrected F0.5 | 0.2642 |
+| Row F1 | 0.0319 |
 
 ## Bootstrap CI on test_intern
 
 | | Value |
 |---|---:|
-| Resamples | 1,000 |
-| Wall time | 611.7 s |
-| Mean event-F0.5 | 0.0475 |
-| Std | 0.0069 |
-| 95 % CI | **[0.0347, 0.0606]** |
+| Resamples | 200 |
+| Wall time | 611.3 s |
+| Mean event-F0.5 | 0.1755 |
+| Std | 0.0298 |
+| 95 % CI | **[0.1232, 0.2355]** |
 
-## Failure analysis
+## Top-k experiment — verdict
 
-- **High recall (0.63), terrible precision (0.06)** — the model fires constantly on nominal windows. ~17 of 27 events get flagged but at the cost of an enormous false-alarm rate.
-- The score distribution dynamic range (max/min ≈ 1.4) is so compressed that any threshold either lets through a flood of nominal alarms or drops most events.
-- The PCA baseline (NB 11) achieves Event F0.5 0.984 on the same data — the LSTM-AE underperforms by ~13×.
+Compared to the original mean-over-all-channels baseline:
 
-## Possible improvements (not implemented)
+| Metric | Mean (all 58) | Top-5 |
+|---|---:|---:|
+| Val event-F0.5 | 0.0565 | **0.2475** |
+| Test event-F0.5 | 0.0733 | **0.2650** |
+| Event recall | 0.6296 | 0.5556 |
+| Event precision | 0.0601 | **0.2344** |
+| Bootstrap 95 % CI | [0.035, 0.061] | **[0.123, 0.236]** |
 
-- More capacity (deeper / wider stacks) and/or longer training
-- Per-channel normalisation rather than per-window z-score
-- Overlapping stride at scoring time so each row is reconstructed in multiple window contexts and the score per row is averaged
-- Switch reconstruction loss to per-channel weighted MSE
+**3.6× improvement in Event F0.5.** Recall drops slightly (−0.07) but precision jumps 4× — the LSTM has several channels that it reconstructs very differently for anomalies vs nominals; selecting the worst-5 channels surfaces that signal that was buried by averaging over well-reconstructed channels.
+
+## Remaining gap vs PCA
+
+The PCA baseline (NB 11) still achieves Event F0.5 **0.984** — the LSTM-AE with topk=5 is at 0.265, a ~3.7× gap. The LSTM can detect ~15 of 27 events (recall 0.56); PCA detects ~25 (recall 0.93).
+
+## Possible further improvements
+
+- Overlapping stride at scoring time (stride < window_size) so each row appears in multiple window reconstructions — reduces non-overlapping boundary effects
+- Longer training (early-stop never triggered at epoch 25; loss still descending)
+- More capacity (deeper / wider LSTM stacks)
+- Per-channel weighted reconstruction loss to push the model to learn tight representations on the most informative channels

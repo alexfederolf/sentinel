@@ -26,43 +26,68 @@ Model artifact: `models/cnn_ae_bootcamp.keras`
 
 ## Scoring
 
+Scoring uses `score_windows(..., topk=5)` — per-window MSE is the mean of the
+**5 worst-reconstructed channels** (out of 58) instead of the mean over all
+channels. Motivation: real anomalies often affect only a handful of
+channels, and averaging over all 58 dilutes the signal.
+
 | Split | Rows | Time | Score range |
 |---|---:|---:|---|
-| Validation | 2,232,277 | 3.3 s | `[0.5863, 0.8041]` |
-| Test_intern | 2,186,220 | 1.6 s | `[0.5879, 0.8207]` |
+| Validation | 2,232,277 | 3.3 s | `[1.0017, 1.2538]` |
+| Test_intern | 2,186,220 | 1.6 s | `[1.0089, 1.2718]` |
 
-Even tighter score range than LSTM-AE — the CNN reconstructs everything in a similar quality band.
+Range shifted upward (top-5 channels naturally have higher MSE than the
+mean over 58) but the relative spread did not widen — the CNN still
+reconstructs nominal and anomalous windows in similar quality bands.
 
 ## Threshold tuning
 
-- Best threshold: `0.730655`
-- Val event-F0.5 at best threshold: **0.0737**
+- Best threshold: `1.138344`
+- Val event-F0.5 at best threshold: **0.1081**
 
 ## Test_intern results (5 metrics)
 
 | Metric | Value |
 |---|---:|
-| Event F0.5 | **0.0821** |
-| Event recall | 0.6296 |
-| Event precision | 0.0675 |
-| ESA corrected F0.5 | 0.0810 |
-| Row F1 | 0.0407 |
+| Event F0.5 | **0.0775** |
+| Event recall | 0.2222 |
+| Event precision | 0.0667 |
+| ESA corrected F0.5 | 0.0762 |
+| Row F1 | — |
 
 ## Bootstrap CI on test_intern
 
 | | Value |
 |---|---:|
-| Resamples | 1,000 |
-| Wall time | 614.8 s |
-| Mean event-F0.5 | 0.0533 |
-| Std | 0.0077 |
-| 95 % CI | **[0.0390, 0.0680]** |
+| Resamples | 200 |
+| Mean event-F0.5 | 0.0507 |
+| 95 % CI | **[0.0271, 0.0792]** |
+
+## Top-k experiment — verdict
+
+Compared to the original mean-over-all-channels scoring:
+
+| Metric | Mean (all 58) | Top-5 |
+|---|---:|---:|
+| Val event-F0.5 | 0.0737 | 0.1081 |
+| Test event-F0.5 | 0.0821 | 0.0775 |
+| Event recall | 0.6296 | 0.2222 |
+| Event precision | 0.0675 | 0.0667 |
+
+Val improved (sharper score), but **test recall collapsed from 0.63 → 0.22**
+without precision compensating. Top-k overfits the sweep to val and
+discards the easy events the CNN was previously catching. Conclusion:
+top-k channel MSE is **not** the right lever for this CNN-AE — its
+per-channel reconstruction errors are too uniform for "worst-channel"
+selection to add information.
 
 ## Failure analysis
 
-- Marginally better than the LSTM-AE on every metric (Event F0.5 0.082 vs 0.073) but in the same regime: high recall, near-zero precision.
-- The CNN-AE's narrower score range hurts the threshold sweep — any cut that catches the events also flags large nominal regions.
-- Identical event recall (0.6296) to the LSTM-AE → both AEs detect the same easy events and miss the same hard ones.
+- The CNN-AE's narrow score range hurts the threshold sweep regardless of
+  scoring variant — any cut that catches events also flags large nominal
+  regions.
+- Both AEs (LSTM and CNN) detect the same easy events and miss the same
+  hard ones. The bottleneck is the model, not the score aggregator.
 
 ## Possible improvements (not implemented)
 

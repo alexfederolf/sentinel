@@ -1,8 +1,7 @@
 """
 Generic window-mean MSE scoring for reconstruction anomaly-detection models.
 
-The bootcamp notebooks (11_pca, 12_lstm_ae, 13_cnn_ae) all follow the same
-scoring recipe:
+The models all follow the same scoring recipe:
 
     1. Reshape row-level scaled data into non-overlapping windows
     2. Feed through the model to get a reconstruction
@@ -10,8 +9,7 @@ scoring recipe:
     4. Broadcast each window score to its WIN rows (tail rows inherit the last
        full window's score)
 
-This module lifts that recipe out of the notebooks so the three baselines
-share byte-identical scoring code. It supports both Keras-style models
+ It supports both Keras-style models
 (``model.predict(X_3d)``) and sklearn PCA (``model.inverse_transform(
 model.transform(X_flat))``).
 """
@@ -46,6 +44,7 @@ def score_windows(
     X_rows: np.ndarray,
     win: int = WINDOW_SIZE,
     batch: int = 256,
+    topk: int | None = None,
 ) -> np.ndarray:
     """
     Row-level anomaly scores via window-mean MSE reconstruction.
@@ -60,6 +59,10 @@ def score_windows(
     X_rows  : float32 (n_rows, n_features)
     win     : window size
     batch   : batch size for the forward pass
+    topk    : if set, score each window by the mean of its ``topk`` largest
+              per-channel MSE values instead of the mean over all channels.
+              Sharpens the score for anomalies that affect only a few channels
+              (the AE failure mode in NB 12/13). ``None`` = original behaviour.
 
     Returns
     -------
@@ -81,21 +84,31 @@ def score_windows(
 
     if has_pca_api:
         X_flat = X_win.reshape(n_complete, win * n_feat)
-        X_hat  = model.inverse_transform(model.transform(X_flat))
-        win_scores = ((X_flat - X_hat) ** 2).mean(axis=1).astype(np.float32)
+        X_hat  = model.inverse_transform(model.transform(X_flat)).reshape(
+            n_complete, win, n_feat
+        )
     elif has_keras_api:
-        # Keras autoencoder: same shape in and out
         X_hat = model.predict(X_win, batch_size=batch, verbose=0)
         if X_hat.shape != X_win.shape:
             raise ValueError(
                 f"Reconstruction shape {X_hat.shape} != input shape {X_win.shape}"
             )
-        win_scores = ((X_win - X_hat) ** 2).mean(axis=(1, 2)).astype(np.float32)
     else:
         raise TypeError(
             f"Unsupported model type {type(model).__name__!r} — needs either "
             f"(transform + inverse_transform) or predict()"
         )
+
+    sq_err = (X_win - X_hat) ** 2  # (n_complete, win, n_feat)
+    if topk is None:
+        win_scores = sq_err.mean(axis=(1, 2))
+    else:
+        if not 1 <= topk <= n_feat:
+            raise ValueError(f"topk must be in [1, {n_feat}], got {topk}")
+        per_channel = sq_err.mean(axis=1)                       # (n_complete, n_feat)
+        topk_vals = np.partition(per_channel, -topk, axis=1)[:, -topk:]
+        win_scores = topk_vals.mean(axis=1)
+    win_scores = win_scores.astype(np.float32)
 
     return broadcast_window_scores_to_rows(win_scores, N, win)
 
