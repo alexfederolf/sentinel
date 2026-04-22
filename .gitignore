@@ -35,6 +35,7 @@ data/processed/
 .vscode/
 .idea/
 *.swp
+scripts/
 
 # ── Saved models ─────────────────────────────────────────────────────────────
 models/*.pkl

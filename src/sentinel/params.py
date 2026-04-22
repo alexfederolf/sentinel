@@ -22,8 +22,9 @@ SCORE_BATCH         = 500_000  # rows scored per batch during inference
 CV_FOLDS            = 5        # folds for temporal cross-validation
 
 # ── LSTM Autoencoder hyperparameters ─────────────────────────────────────────
-LATENT_DIM    = 64             # LSTM bottleneck dimension
-HIDDEN_DIM    = 128            # LSTM encoder/decoder hidden dimension
+LATENT_DIM    = 32             # LSTM bottleneck dimension
+HIDDEN_DIM    = 64             # LSTM encoder/decoder hidden dimension
+DROPOUT       = 0.2            # LSTM dropout (standard, not recurrent_dropout)
 
 # ── Plot colours (consistent across all notebooks) ────────────────────────────
 ANOMALY_COLOR = '#e74c3c'

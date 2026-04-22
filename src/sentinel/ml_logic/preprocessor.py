@@ -20,16 +20,12 @@ import gc
 import json
 import pickle
 import time
-from pathlib import Path
 
 import numpy as np
 from sklearn.preprocessing import RobustScaler
 
 from ..params import RANDOM_STATE, TRAIN_RATIO, TRAIN_STRIDE, WINDOW_SIZE
-from .data import PROCESSED_DIR, load_target_channels, load_test, load_train
-
-# Models directory is at <repo_root>/models — three levels up from this file
-MODELS_DIR = Path(__file__).resolve().parents[3] / "models"
+from .data import MODELS_DIR, PROCESSED_DIR, load_target_channels, load_test, load_train
 
 
 def create_windows(
