@@ -8,10 +8,14 @@ caller can save, display, or embed as needed.
 
 Functions
 ---------
-plot_channels        — multi-panel time-series with anomaly shading
-plot_segment_zoom    — zoom into a single event with context
-plot_distributions   — per-channel KDE histograms (nominal vs anomaly)
-plot_correlation     — Pearson correlation heatmap across channels
+plot_channels                     — multi-panel time-series with anomaly shading
+plot_segment_zoom                 — zoom into a single event with context
+plot_distributions                — per-channel KDE histograms (nominal vs anomaly)
+plot_correlation                  — Pearson correlation heatmap across channels
+plot_score_distribution           — score histograms split by true label + threshold
+plot_score_timeline               — score vs row index with threshold + GT shading
+plot_event_zoom_with_score        — channel zoom plus PCA score panel
+plot_confusion_and_channel_errors — confusion matrix + top-k channel MSE bar chart
 """
 
 from __future__ import annotations
@@ -246,5 +250,266 @@ def plot_correlation(
         cbar_kws={"shrink": 0.8},
     )
     ax.set_title("Channel Correlation Matrix", fontsize=13, fontweight="bold")
+    fig.tight_layout()
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Prediction-phase plots
+# ----------------------------------------------------------------------------
+# The four functions below visualise the output of a trained reconstruction
+# model (PCA, LSTM-AE, CNN-AE). They take the row-level score array produced
+# by `score_windows` and, optionally, a binary ground-truth label array.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def plot_score_distribution(
+    scores: np.ndarray,
+    y_true: np.ndarray,
+    threshold: float,
+    figsize: tuple = (10, 4),
+) -> plt.Figure:
+    """
+    Overlaid KDE histograms of anomaly scores, split by ground-truth label.
+
+    A vertical line marks the decision threshold. The x-axis switches to log
+    scale automatically when the score range spans more than two decades,
+    which is typical for reconstruction MSE.
+
+    Parameters
+    ----------
+    scores    : float array (n_rows,) — row-level anomaly scores
+    y_true    : int array of 0/1 (n_rows,) — ground-truth labels
+    threshold : decision threshold
+    figsize   : figure size
+
+    Returns
+    -------
+    fig : matplotlib Figure
+    """
+    scores = np.asarray(scores, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.int8)
+
+    nom  = scores[y_true == 0]
+    anom = scores[y_true == 1]
+
+    # Log-x when positive scores span > 2 decades
+    pos = scores[scores > 0]
+    use_log = pos.size > 0 and (pos.max() / max(pos.min(), 1e-12)) > 1e2
+
+    fig, ax = plt.subplots(figsize=figsize)
+    sns.set_style("whitegrid")
+
+    if use_log:
+        # log-spaced bins so the histogram renders sensibly on a log x-axis
+        lo = max(pos.min(), 1e-12)
+        hi = pos.max()
+        bins = np.logspace(np.log10(lo), np.log10(hi), 60)
+    else:
+        bins = 60
+
+    if nom.size > 0:
+        sns.histplot(nom, ax=ax, color=NOMINAL_COLOR, alpha=0.5,
+                     stat="density", bins=bins, kde=True,
+                     label=f"Nominal (n={nom.size:,})")
+    if anom.size > 0:
+        sns.histplot(anom, ax=ax, color=ANOMALY_COLOR, alpha=0.5,
+                     stat="density", bins=bins, kde=True,
+                     label=f"Anomaly (n={anom.size:,})")
+
+    if use_log:
+        ax.set_xscale("log")
+
+    ax.axvline(threshold, color="black", linestyle="--", linewidth=1.2,
+               label=f"Threshold = {threshold:g}")
+    ax.set_xlabel("Anomaly score" + (" (log scale)" if use_log else ""))
+    ax.set_ylabel("Density")
+    ax.set_title("Score distribution: Nominal vs Anomaly", fontsize=12, fontweight="bold")
+    ax.legend(fontsize=9, loc="best")
+    fig.tight_layout()
+    return fig
+
+
+def plot_score_timeline(
+    scores: np.ndarray,
+    y_true: np.ndarray,
+    threshold: float,
+    figsize: tuple = (18, 3),
+    sample_frac: float | None = None,
+) -> plt.Figure:
+    """
+    Row-index timeline of anomaly scores with threshold and ground-truth shading.
+
+    Parameters
+    ----------
+    scores      : float array (n_rows,)
+    y_true      : int array of 0/1 (n_rows,) — used to shade true anomaly runs
+    threshold   : decision threshold (horizontal line)
+    figsize     : figure size
+    sample_frac : if set, random-sample this fraction of rows (seed=42) to keep
+                  the plot responsive for multi-million-row arrays. The labels
+                  are re-aligned so shading stays on the sampled index.
+
+    Returns
+    -------
+    fig : matplotlib Figure
+    """
+    scores = np.asarray(scores, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.int8)
+    idx    = np.arange(len(scores))
+
+    if sample_frac is not None and 0 < sample_frac < 1:
+        rng = np.random.default_rng(42)
+        keep = rng.random(len(scores)) < sample_frac
+        # sort sampled indices so shading segments remain contiguous
+        sel = np.sort(np.where(keep)[0])
+        idx, scores, y_true = sel, scores[sel], y_true[sel]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    sns.set_style("whitegrid")
+    ax.plot(idx, scores, lw=0.5, color=NOMINAL_COLOR, alpha=0.9)
+    _shade_anomalies(ax, idx, y_true)
+    ax.axhline(threshold, color="black", linestyle="--", linewidth=1.0,
+               label=f"Threshold = {threshold:g}")
+
+    ax.set_xlabel("Row index", fontsize=9)
+    ax.set_ylabel("Anomaly score", fontsize=9)
+    ax.set_title("Score timeline (red = true anomaly segments)",
+                 fontsize=11, fontweight="bold")
+    anom_patch = mpatches.Patch(color=ANOMALY_COLOR, alpha=0.4, label="True anomaly")
+    ax.legend(handles=[anom_patch, ax.get_lines()[-1]], fontsize=8, loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
+def plot_event_zoom_with_score(
+    df_raw: pd.DataFrame,
+    scores: np.ndarray,
+    seg_start: int,
+    seg_end: int,
+    channels: list[str],
+    threshold: float,
+    context: int = 500,
+    label_col: str = "is_anomaly",
+    figsize: tuple = (16, 2.5),
+) -> plt.Figure:
+    """
+    Zoom into one anomaly segment: one panel per channel plus a bottom panel
+    with the row-level anomaly score and its threshold.
+
+    Anomalous periods are shaded across every panel.
+
+    Parameters
+    ----------
+    df_raw    : DataFrame with channel and (optional) label columns. Its index
+                must line up with ``scores`` row-for-row.
+    scores    : float array (n_rows,)
+    seg_start : first row of the true anomaly segment
+    seg_end   : last row of the true anomaly segment
+    channels  : channel column names to plot (one panel each)
+    threshold : decision threshold (horizontal line on the score panel)
+    context   : rows to include before/after the segment
+    label_col : anomaly label column in df_raw
+    figsize   : (width, height_per_panel)
+
+    Returns
+    -------
+    fig : matplotlib Figure
+    """
+    scores = np.asarray(scores, dtype=np.float64)
+    n = len(df_raw)
+    lo = max(0, seg_start - context)
+    hi = min(n - 1, seg_end + context)
+
+    sub   = df_raw.iloc[lo:hi + 1]
+    s_sub = scores[lo:hi + 1]
+    idx   = sub.index.values
+    labels = sub[label_col].values if label_col in sub.columns else np.zeros(len(sub), dtype=np.int8)
+
+    n_ch = len(channels)
+    fig, axes = plt.subplots(
+        n_ch + 1, 1,
+        figsize=(figsize[0], figsize[1] * (n_ch + 1)),
+        sharex=True,
+    )
+
+    for ax, ch in zip(axes[:-1], channels):
+        ax.plot(idx, sub[ch].values, lw=0.8, color=NOMINAL_COLOR)
+        _shade_anomalies(ax, idx, labels)
+        ax.set_ylabel(ch, fontsize=9)
+
+    ax_s = axes[-1]
+    ax_s.plot(idx, s_sub, lw=0.9, color="#555555")
+    _shade_anomalies(ax_s, idx, labels)
+    ax_s.axhline(threshold, color="black", linestyle="--", linewidth=1.0,
+                 label=f"Threshold = {threshold:g}")
+    ax_s.set_ylabel("PCA score", fontsize=9)
+    ax_s.set_xlabel("Row index", fontsize=9)
+    ax_s.legend(fontsize=8, loc="upper right")
+
+    axes[0].set_title(
+        f"Event zoom rows {seg_start}–{seg_end} (±{context} context)",
+        fontsize=11, fontweight="bold",
+    )
+    fig.tight_layout()
+    return fig
+
+
+def plot_confusion_and_channel_errors(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    per_channel_mse: np.ndarray,
+    channel_names: list[str],
+    top_k: int = 10,
+    figsize: tuple = (14, 4),
+) -> plt.Figure:
+    """
+    Two-panel diagnostic: row-level confusion matrix plus a bar chart of the
+    top-k channels ranked by mean reconstruction MSE.
+
+    Parameters
+    ----------
+    y_true          : int array of 0/1
+    y_pred          : int array of 0/1
+    per_channel_mse : float array (n_channels,) — mean MSE per channel
+    channel_names   : list[str] aligned with ``per_channel_mse``
+    top_k           : number of worst channels to show
+    figsize         : figure size
+
+    Returns
+    -------
+    fig : matplotlib Figure
+    """
+    y_true = np.asarray(y_true, dtype=np.int8)
+    y_pred = np.asarray(y_pred, dtype=np.int8)
+    per_channel_mse = np.asarray(per_channel_mse, dtype=np.float64)
+
+    tp = int(((y_pred == 1) & (y_true == 1)).sum())
+    fp = int(((y_pred == 1) & (y_true == 0)).sum())
+    fn = int(((y_pred == 0) & (y_true == 1)).sum())
+    tn = int(((y_pred == 0) & (y_true == 0)).sum())
+    cm = np.array([[tn, fp], [fn, tp]])
+
+    fig, (ax_cm, ax_bar) = plt.subplots(1, 2, figsize=figsize)
+
+    sns.heatmap(
+        cm, ax=ax_cm, annot=True, fmt="d",
+        cmap="Blues", cbar=False, square=True,
+        xticklabels=["Pred 0", "Pred 1"],
+        yticklabels=["True 0", "True 1"],
+    )
+    ax_cm.set_title("Row-level confusion matrix", fontsize=11, fontweight="bold")
+
+    k = min(top_k, len(channel_names))
+    order = np.argsort(per_channel_mse)[::-1][:k]
+    names = [channel_names[i] for i in order]
+    vals  = per_channel_mse[order]
+
+    sns.barplot(x=vals, y=names, ax=ax_bar, color=ANOMALY_COLOR)
+    ax_bar.set_xlabel("Mean reconstruction MSE")
+    ax_bar.set_ylabel("")
+    ax_bar.set_title(f"Top {k} channels by reconstruction error",
+                     fontsize=11, fontweight="bold")
+
     fig.tight_layout()
     return fig
