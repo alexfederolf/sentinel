@@ -14,9 +14,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-DATA_DIR = Path(__file__).resolve().parents[3] / "data"
-RAW_DIR = DATA_DIR / "raw"
-PROCESSED_DIR = DATA_DIR / "processed"
+DATA_DIR        = Path(__file__).resolve().parents[3] / "data"
+RAW_DIR         = DATA_DIR / "raw"
+PROCESSED_DIR   = DATA_DIR / "processed"
+MODELS_DIR      = Path(__file__).resolve().parents[3] / "models"
+SUBMISSIONS_DIR = Path(__file__).resolve().parents[3] / "submissions"
 
 
 def load_train(path: Path = RAW_DIR / "train.parquet") -> pd.DataFrame:

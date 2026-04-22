@@ -35,6 +35,7 @@ data/processed/
 .vscode/
 .idea/
 *.swp
+scripts/
 
 # ── Saved models ─────────────────────────────────────────────────────────────
 models/*.pkl
@@ -57,3 +58,6 @@ results/
 .env.yaml
 .credentials
 secrets.toml
+
+# ── Saved Keras models ────────────────────────────────────────────────────────
+models/*.keras
