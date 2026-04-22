@@ -13,10 +13,34 @@ working directory.
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
+
+
+def read_parquet_float32(path):
+    print('read as float32')
+    # Read only metadata to know schema
+    parquet_file = pq.ParquetFile(path)
+
+    data = {}
+
+    for col in parquet_file.schema.names:
+        # Read column separately (memory efficient)
+        table = pq.read_table(path, columns=[col])
+        arr = table.column(0).to_pandas()
+
+        # Keep id as-is, cast everything else to float32 if numeric
+        if col != 'id':
+            arr = pd.to_numeric(arr, errors="ignore")
+            if pd.api.types.is_numeric_dtype(arr):
+                arr = arr.astype("float32")
+
+        data[col] = arr
+
+    return pd.DataFrame(data)
 
 
 def load_train(path: Path = RAW_DIR / "train.parquet") -> pd.DataFrame:
@@ -34,7 +58,7 @@ def load_train(path: Path = RAW_DIR / "train.parquet") -> pd.DataFrame:
         All 76 channel columns, 11 telecommand columns, ``id``, and
         ``is_anomaly`` label.
     """
-    return pd.read_parquet(path)
+    return read_parquet_float32(path) #pd.read_parquet(path)
 
 
 def load_test(path: Path = RAW_DIR / "test.parquet") -> pd.DataFrame:
@@ -51,7 +75,7 @@ def load_test(path: Path = RAW_DIR / "test.parquet") -> pd.DataFrame:
     pd.DataFrame
         Same structure as train minus the label column.
     """
-    return pd.read_parquet(path)
+    return read_parquet_float32(path) #pd.read_parquet(path)
 
 
 def load_target_channels(path: Path = RAW_DIR / "target_channels.csv") -> list[str]:
