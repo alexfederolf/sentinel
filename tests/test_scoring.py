@@ -5,6 +5,7 @@ from sklearn.decomposition import PCA
 
 from sentinel.ml_logic.scoring import (
     broadcast_window_scores_to_rows,
+    score_report,
     score_windows,
     window_scores_only,
 )
@@ -117,3 +118,146 @@ def test_window_scores_only_consistent_with_score_windows():
     row      = score_windows(pca, X_rows, win=win)
     for i in range(n_win):
         assert np.allclose(row[i * win:(i + 1) * win], win_only[i], atol=1e-5)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# topk parity between window_scores_only and score_windows
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_window_scores_only_topk_matches_score_windows_topk():
+    """Both views must agree under topk so the histogram and the timeline
+    use the same definition of 'window score'."""
+    rng = np.random.default_rng(3)
+    win, n_feat, n_win = 10, 6, 8
+    X_rows = rng.normal(size=(n_win * win, n_feat)).astype(np.float32)
+    pca = PCA(n_components=3, random_state=0).fit(
+        X_rows.reshape(n_win, win * n_feat)
+    )
+    win_only = window_scores_only(pca, X_rows, win=win, topk=2)
+    row      = score_windows(pca, X_rows, win=win, topk=2)
+    for i in range(n_win):
+        assert np.allclose(row[i * win:(i + 1) * win], win_only[i], atol=1e-5)
+
+
+def test_window_scores_only_rejects_bad_topk():
+    rng = np.random.default_rng(4)
+    win, n_feat, n_win = 10, 4, 3
+    X_rows = rng.normal(size=(n_win * win, n_feat)).astype(np.float32)
+    pca = PCA(n_components=2, random_state=0).fit(
+        X_rows.reshape(n_win, win * n_feat)
+    )
+    with pytest.raises(ValueError):
+        window_scores_only(pca, X_rows, win=win, topk=0)
+    with pytest.raises(ValueError):
+        window_scores_only(pca, X_rows, win=win, topk=n_feat + 1)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# score_report
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_score_report_keys_and_shapes_pca():
+    rng = np.random.default_rng(10)
+    win, n_feat, n_win = 10, 5, 7
+    X_rows = rng.normal(size=(n_win * win, n_feat)).astype(np.float32)
+    pca = PCA(n_components=3, random_state=0).fit(
+        X_rows.reshape(n_win, win * n_feat)
+    )
+
+    out = score_report(pca, X_rows, win=win)
+
+    assert set(out) == {
+        "row_scores", "window_scores", "per_channel_mse",
+        "window_channel_mse", "topk_channels",
+    }
+    assert out["row_scores"].shape         == (n_win * win,)
+    assert out["window_scores"].shape      == (n_win,)
+    assert out["per_channel_mse"].shape    == (n_feat,)
+    assert out["window_channel_mse"].shape == (n_win, n_feat)
+    assert out["topk_channels"] is None
+
+    # Dtypes
+    assert out["row_scores"].dtype         == np.float32
+    assert out["window_scores"].dtype      == np.float32
+    assert out["per_channel_mse"].dtype    == np.float32
+    assert out["window_channel_mse"].dtype == np.float32
+
+
+def test_score_report_matches_score_windows_and_window_scores_only():
+    """score_report must not drift from the existing scalar paths."""
+    rng = np.random.default_rng(11)
+    win, n_feat, n_win = 20, 6, 5
+    X_rows = rng.normal(size=(n_win * win, n_feat)).astype(np.float32)
+    pca = PCA(n_components=3, random_state=0).fit(
+        X_rows.reshape(n_win, win * n_feat)
+    )
+
+    out = score_report(pca, X_rows, win=win)
+
+    assert np.allclose(out["row_scores"],    score_windows(pca, X_rows, win=win))
+    assert np.allclose(out["window_scores"], window_scores_only(pca, X_rows, win=win))
+
+
+def test_score_report_per_channel_mse_is_mean_over_windows():
+    rng = np.random.default_rng(12)
+    win, n_feat, n_win = 15, 4, 6
+    X_rows = rng.normal(size=(n_win * win, n_feat)).astype(np.float32)
+    pca = PCA(n_components=2, random_state=0).fit(
+        X_rows.reshape(n_win, win * n_feat)
+    )
+
+    out = score_report(pca, X_rows, win=win)
+    # per_channel_mse must equal mean of window_channel_mse across windows
+    expected = out["window_channel_mse"].mean(axis=0)
+    assert np.allclose(out["per_channel_mse"], expected, atol=1e-6)
+
+
+def test_score_report_topk_channels_pick_largest():
+    rng = np.random.default_rng(13)
+    win, n_feat, n_win = 10, 5, 4
+    X_rows = rng.normal(size=(n_win * win, n_feat)).astype(np.float32)
+    pca = PCA(n_components=2, random_state=0).fit(
+        X_rows.reshape(n_win, win * n_feat)
+    )
+
+    out = score_report(pca, X_rows, win=win, topk=2)
+
+    assert out["topk_channels"].shape == (n_win, 2)
+    # Each picked index must be among the two largest per-channel MSEs.
+    for i in range(n_win):
+        ranked = np.argsort(out["window_channel_mse"][i])[::-1]
+        top2   = set(ranked[:2])
+        assert set(out["topk_channels"][i].tolist()) == top2
+
+
+def test_score_report_short_input_returns_zeros():
+    """Fewer than one full window → empty window arrays, zero row scores,
+    no model dispatch."""
+    class Useless:
+        pass
+
+    X = np.zeros((5, 3), dtype=np.float32)   # win=10 → 0 complete windows
+    out = score_report(Useless(), X, win=10)
+
+    assert out["row_scores"].shape         == (5,)
+    assert (out["row_scores"] == 0.0).all()
+    assert out["window_scores"].shape      == (0,)
+    assert out["per_channel_mse"].shape    == (3,)
+    assert out["window_channel_mse"].shape == (0, 3)
+    assert out["topk_channels"] is None
+
+
+def test_score_report_with_keras_like_model():
+    """Zero-reconstruction model: per_channel_mse == mean of X**2 per channel."""
+    class ZeroReconstruction:
+        def predict(self, X, batch_size=None, verbose=0):
+            return np.zeros_like(X)
+
+    rng = np.random.default_rng(14)
+    win, n_feat, n_win = 10, 3, 4
+    X_rows = rng.normal(size=(n_win * win, n_feat)).astype(np.float32)
+
+    out = score_report(ZeroReconstruction(), X_rows, win=win, batch=2)
+
+    expected_per_channel = (X_rows ** 2).mean(axis=0)
+    assert np.allclose(out["per_channel_mse"], expected_per_channel, atol=1e-5)
