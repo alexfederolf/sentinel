@@ -104,8 +104,9 @@ def score_windows(model: PCA, X_rows: np.ndarray, win: int,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_arrays():
-    """Load preprocessed arrays + config. Returns all tensors needed downstream."""
-    with open(PROCESSED_DIR / "preprocessing_config.json") as f:
+    """Load Kaggle-pipeline arrays + config. Returns all tensors needed downstream."""
+    KAGGLE_DIR = PROCESSED_DIR / "kaggle"
+    with open(KAGGLE_DIR / "preprocessing_config.json") as f:
         cfg = json.load(f)
 
     split_idx = cfg["split_idx"]
@@ -114,11 +115,11 @@ def load_arrays():
 
     print("Loading arrays …")
     t0 = time.time()
-    X_train_nom = np.load(PROCESSED_DIR / "X_train_nom.npy")
-    X_all       = np.load(PROCESSED_DIR / "train_full_scaled.npy")
-    y_all       = np.load(PROCESSED_DIR / "y_train_row.npy")
-    X_test      = np.load(PROCESSED_DIR / "test_scaled.npy")
-    test_ids    = np.load(PROCESSED_DIR / "test_ids.npy")
+    X_train_nom = np.load(KAGGLE_DIR / "X_train_nom.npy")
+    X_all       = np.load(KAGGLE_DIR / "train_full_scaled.npy")
+    y_all       = np.load(KAGGLE_DIR / "y_train_row.npy")
+    X_test      = np.load(KAGGLE_DIR / "test_scaled.npy")
+    test_ids    = np.load(KAGGLE_DIR / "test_ids.npy")
 
     # Val = last 20% of the temporal split.
     X_val = X_all[split_idx:]

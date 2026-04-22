@@ -16,7 +16,7 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 
-from .data import RAW_DIR, SUBMISSIONS_DIR
+from ...src.sentinel.ml_logic.data import RAW_DIR, SUBMISSIONS_DIR
 
 
 def make_submission(

@@ -1,7 +1,6 @@
 """
-Corrected event-wise F0.5-score
 
-Source: ESA Anomaly Detection Benchmark
+ESA Corrected event-wise F0.5-score from the ESA Anomaly Detection Benchmark (ESA-ADB)
 https://github.com/kplabs-pl/ESA-ADB/timeeval/metrics/ESA_ADB_metrics.py
 
 Formula
@@ -34,7 +33,7 @@ from .data import find_anomaly_segments
 
 
 def _find_predicted_segments(y_pred: np.ndarray) -> list[dict]:
-    """Return contiguous predicted-anomaly segments — vectorised via np.diff."""
+    """Return contiguous predicted-anomaly segments - vectorised via np.diff."""
     padded = np.concatenate(([0], y_pred.astype(np.int8), [0]))
     d      = np.diff(padded)
     starts = np.where(d ==  1)[0]
@@ -125,17 +124,17 @@ def corrected_event_f05(
 
 
 def f05_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Convenience wrapper — returns just the F0.5 scalar."""
+    """Convenience wrapper - returns just the F0.5 scalar."""
     return corrected_event_f05(y_true, y_pred, beta=0.5)["f_score"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Bootcamp metrics (additive — do not touch corrected_event_f05 above)
+# Bootcamp metrics (additive - do not touch corrected_event_f05 above)
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # The ESA corrected metric (above) is kept for Kaggle-leaderboard comparison
 # and exposed here as `esa_metric`. Everything else in this block is a
-# *standard* event / point / row metric — no TNR correction, no secret sauce,
+# *standard* event / point / row metric - no TNR correction, no secret sauce,
 # easy to defend in a bootcamp presentation.
 #
 # All event-level metrics share the same TP/FN/FP-event tally, computed once
@@ -145,12 +144,12 @@ def f05_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-# Alias — `esa_metric` is the name used in notebooks 11–13 for clarity.
+# Alias - `esa_metric` is the name used in notebooks 11–13 for clarity.
 esa_metric = corrected_event_f05
 
 
 def _event_counts(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[int, int, int, int]:
-    """Event-level TP / FN / FP / total — shared by every event-wise metric."""
+    """Event-level TP / FN / FP / total - shared by every event-wise metric."""
     true_segs = find_anomaly_segments(y_true)
     pred_segs = _find_predicted_segments(y_pred)
     n_events  = len(true_segs)
@@ -176,7 +175,7 @@ def event_fbeta(
     beta: float = 0.5,
 ) -> dict:
     """
-    Standard event-wise F-beta. **No TNR correction** — this is the metric
+    Standard event-wise F-beta. **No TNR correction** - this is the metric
     the bootcamp notebooks tune against.
 
     Pr_ew = TP_events / (TP_events + FP_pred_events)
@@ -227,7 +226,7 @@ def event_f2(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
 def event_detection_rate(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     """
-    TP_events / N_true_events — the jury-friendly "caught X of Y events" number.
+    TP_events / N_true_events - the jury-friendly "caught X of Y events" number.
     Same as event-wise recall, but returned with the raw counts so the frontend
     can print `32 / 38 (84%)` without recomputing.
     """
@@ -245,7 +244,7 @@ def point_adjust_f1(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     predicted row is positive, mark the entire event as predicted. Then
     compute point-level precision / recall / F1 on the adjusted prediction.
 
-    This is forgiving — it rewards partial event detection — and is one of
+    This is forgiving - it rewards partial event detection - and is one of
     the default reference metrics in the time-series anomaly-detection
     literature. We report it alongside the stricter event-wise metrics.
     """
@@ -322,7 +321,7 @@ def compute_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     rpr  = row_precision_recall(y_true, y_pred)
 
     return {
-        # event-wise (uncorrected) — primary tuning metric
+        # event-wise (uncorrected) - primary tuning metric
         "event_f05"          : ef05["f_score"],
         "event_f1"           : ef1["f_score"],
         "event_f2"           : ef2["f_score"],
