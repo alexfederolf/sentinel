@@ -24,7 +24,14 @@ import time
 import numpy as np
 from sklearn.preprocessing import RobustScaler
 
-from ..params import RANDOM_STATE, TRAIN_RATIO, TRAIN_STRIDE, WINDOW_SIZE
+from ..params import (
+    BOOTCAMP_TRAIN_RATIO,
+    BOOTCAMP_VAL_RATIO,
+    RANDOM_STATE,
+    TRAIN_RATIO,
+    TRAIN_STRIDE,
+    WINDOW_SIZE,
+)
 from .data import MODELS_DIR, PROCESSED_DIR, load_target_channels, load_test, load_train
 
 
@@ -246,5 +253,225 @@ def run_preprocessing() -> None:
         print(f"  {status} {name:<22} shape={str(arr.shape):<25} dtype={arr.dtype}")
         if not ok or nan_inf:
             all_ok = False
+
+    print(f"\n{'All checks passed ✓' if all_ok else 'Some checks FAILED ✗'}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Bootcamp preprocessing — three-way labeled split (additive, doesn't touch
+# the Kaggle preprocessing above).
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _snap_to_nominal(labels: np.ndarray, target: int) -> int:
+    """
+    Advance `target` until labels[target] == 0, so the split lies inside a
+    nominal stretch and no anomaly segment is cut across splits.
+    Returns the snapped index (or len(labels) if no nominal row is found
+    after `target`, which should never happen in practice).
+    """
+    t = int(target)
+    N = len(labels)
+    while t < N and labels[t] == 1:
+        t += 1
+    return t
+
+
+def run_preprocessing_bootcamp(
+    train_ratio: float = BOOTCAMP_TRAIN_RATIO,
+    val_ratio: float   = BOOTCAMP_VAL_RATIO,
+) -> None:
+    """
+    Three-way chronological labeled split of train.parquet:
+    70 % train / 15 % val / 15 % test_intern (defaults).
+
+    Everything is labeled — `test_intern` is the local "private leaderboard"
+    that notebooks 11–13 evaluate against so they don't have to ship blind
+    to Kaggle to know whether a change helped.
+
+    Cuts are snapped forward to the nearest nominal row so no true event is
+    sliced across splits. RobustScaler is fit on **nominal training rows
+    only** (70 % slice, `is_anomaly == 0`) to avoid leakage.
+
+    Artifacts are written to `data/processed/bootcamp/` so this pipeline is
+    disjoint from the Kaggle pipeline in `data/processed/`.
+
+    Parameters
+    ----------
+    train_ratio, val_ratio : float
+        Train / val fractions. test_intern gets the remainder.
+
+    Writes
+    ------
+    data/processed/bootcamp/
+        X_train_nom.npy          (3D, nominal training windows — fit target)
+        train_scaled.npy         (2D, all scaled training rows — for windowing)
+        y_train.npy              (1D, int8 labels)
+        val_scaled.npy           (2D)
+        y_val.npy                (1D)
+        test_intern_scaled.npy   (2D)
+        y_test_intern.npy        (1D)
+        scaler.pkl               (RobustScaler fit on nominal training rows)
+        bootcamp_config.json     (indices, shapes, ratios)
+    """
+    assert 0.0 < train_ratio < 1.0, f"train_ratio out of range: {train_ratio}"
+    assert 0.0 < val_ratio   < 1.0, f"val_ratio out of range: {val_ratio}"
+    assert train_ratio + val_ratio < 1.0, (
+        f"train+val must leave room for test_intern, got {train_ratio + val_ratio}"
+    )
+
+    OUT_DIR = PROCESSED_DIR / "bootcamp"
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    MODELS_DIR.mkdir(exist_ok=True)
+    np.random.seed(RANDOM_STATE)
+
+    # ── 1. Load raw data (train only — no Kaggle test) ────────────────────────
+    print("Loading train.parquet …")
+    t0 = time.time()
+    train = load_train()
+    target_channels = load_target_channels()
+    print(f"  loaded in {time.time() - t0:.1f}s")
+
+    N       = len(train)
+    N_FEAT  = len(target_channels)
+    labels  = train["is_anomaly"].values.astype(np.int8)
+
+    # ── 2. Snap split indices to nominal rows ─────────────────────────────────
+    raw_split_train = int(N * train_ratio)
+    raw_split_val   = int(N * (train_ratio + val_ratio))
+    split_train = _snap_to_nominal(labels, raw_split_train)
+    split_val   = _snap_to_nominal(labels, raw_split_val)
+
+    print(f"\nSplit targets: train={raw_split_train:,}  val={raw_split_val:,}")
+    print(f"Snapped:       train={split_train:,}  val={split_val:,}  "
+          f"(drift {split_train-raw_split_train:+d} / {split_val-raw_split_val:+d})")
+
+    train_slice        = train.iloc[:split_train]
+    val_slice          = train.iloc[split_train:split_val]
+    test_intern_slice  = train.iloc[split_val:]
+
+    y_train       = labels[:split_train]
+    y_val         = labels[split_train:split_val]
+    y_test_intern = labels[split_val:]
+
+    nom_train_slice = train_slice[train_slice["is_anomaly"] == 0]
+
+    print(f"\nBootcamp slices:")
+    print(f"  train        : {len(train_slice):>12,} rows  "
+          f"({int(y_train.sum()):>7,} anom)")
+    print(f"  val          : {len(val_slice):>12,} rows  "
+          f"({int(y_val.sum()):>7,} anom)")
+    print(f"  test_intern  : {len(test_intern_slice):>12,} rows  "
+          f"({int(y_test_intern.sum()):>7,} anom)")
+    print(f"  nominal train (fit pool): {len(nom_train_slice):,} rows")
+
+    # ── 3. Fit RobustScaler on nominal training rows only ─────────────────────
+    print("\nFitting RobustScaler on nominal training rows …")
+    scaler = RobustScaler()
+    scaler.fit(nom_train_slice[target_channels].values.astype(np.float32))
+
+    scaler_path = OUT_DIR / "scaler.pkl"
+    with open(scaler_path, "wb") as f:
+        pickle.dump(scaler, f)
+    print(f"  scaler saved → {scaler_path}")
+
+    # ── 4. Scale the three splits ─────────────────────────────────────────────
+    print("\nScaling splits …")
+    train_scaled = scaler.transform(
+        train_slice[target_channels].values.astype(np.float32)
+    ).astype(np.float32)
+    val_scaled = scaler.transform(
+        val_slice[target_channels].values.astype(np.float32)
+    ).astype(np.float32)
+    test_intern_scaled = scaler.transform(
+        test_intern_slice[target_channels].values.astype(np.float32)
+    ).astype(np.float32)
+
+    nom_train_scaled = scaler.transform(
+        nom_train_slice[target_channels].values.astype(np.float32)
+    ).astype(np.float32)
+
+    del train, train_slice, val_slice, test_intern_slice, nom_train_slice
+    gc.collect()
+
+    # ── 5. Build nominal-training windows for model fitting ──────────────────
+    print(f"\nCreating X_train_nom windows (size={WINDOW_SIZE}, stride={TRAIN_STRIDE}) …")
+    X_train_nom, _ = create_windows(nom_train_scaled, WINDOW_SIZE, TRAIN_STRIDE)
+    del nom_train_scaled
+    gc.collect()
+
+    # ── 6. Save arrays ────────────────────────────────────────────────────────
+    print("\nSaving arrays …")
+    save_manifest = {
+        "X_train_nom.npy"        : X_train_nom,
+        "train_scaled.npy"       : train_scaled,
+        "y_train.npy"            : y_train,
+        "val_scaled.npy"         : val_scaled,
+        "y_val.npy"              : y_val,
+        "test_intern_scaled.npy" : test_intern_scaled,
+        "y_test_intern.npy"      : y_test_intern,
+    }
+    total = 0
+    for fname, arr in save_manifest.items():
+        path = OUT_DIR / fname
+        print(f"  {fname:<26} {str(arr.shape):<22} {arr.nbytes / 1e6:>8.1f} MB")
+        np.save(path, arr)
+        total += arr.nbytes
+    print(f"\n  Total saved : {total / 1e9:.2f} GB → {OUT_DIR}")
+
+    # ── 7. Save bootcamp config ───────────────────────────────────────────────
+    config = {
+        "window_size"          : WINDOW_SIZE,
+        "train_stride"         : TRAIN_STRIDE,
+        "bootcamp_train_ratio" : train_ratio,
+        "bootcamp_val_ratio"   : val_ratio,
+        "split_train_idx"      : int(split_train),
+        "split_val_idx"        : int(split_val),
+        "n_features"           : N_FEAT,
+        "target_channels"      : target_channels,
+        "n_train_rows"         : int(len(y_train)),
+        "n_val_rows"           : int(len(y_val)),
+        "n_test_intern_rows"   : int(len(y_test_intern)),
+        "n_train_anom"         : int(y_train.sum()),
+        "n_val_anom"           : int(y_val.sum()),
+        "n_test_intern_anom"   : int(y_test_intern.sum()),
+        "shapes"               : {k.replace(".npy", ""): list(v.shape)
+                                  for k, v in save_manifest.items()},
+    }
+    config_path = OUT_DIR / "bootcamp_config.json"
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+    print(f"  config saved → {config_path}")
+
+    # ── 8. Sanity checks ──────────────────────────────────────────────────────
+    print("\nSanity checks …")
+    checks = [
+        ("X_train_nom",        X_train_nom,        3, np.float32),
+        ("train_scaled",       train_scaled,       2, np.float32),
+        ("y_train",            y_train,            1, np.int8),
+        ("val_scaled",         val_scaled,         2, np.float32),
+        ("y_val",              y_val,              1, np.int8),
+        ("test_intern_scaled", test_intern_scaled, 2, np.float32),
+        ("y_test_intern",      y_test_intern,      1, np.int8),
+    ]
+    all_ok = True
+    for name, arr, ndim, dtype in checks:
+        ok = arr.ndim == ndim and arr.dtype == dtype
+        nan_inf = (
+            bool(np.isnan(arr).any() or np.isinf(arr).any())
+            if arr.dtype.kind == "f"
+            else False
+        )
+        status = "✓" if ok and not nan_inf else "✗"
+        print(f"  {status} {name:<22} shape={str(arr.shape):<25} dtype={arr.dtype}")
+        if not ok or nan_inf:
+            all_ok = False
+
+    # Verify no event is sliced across splits
+    if y_train[-1] == 1 and len(y_val) > 0 and y_val[0] == 1:
+        print("  ✗ WARNING: anomaly straddles train/val boundary")
+        all_ok = False
+    if y_val[-1] == 1 and len(y_test_intern) > 0 and y_test_intern[0] == 1:
+        print("  ✗ WARNING: anomaly straddles val/test_intern boundary")
+        all_ok = False
 
     print(f"\n{'All checks passed ✓' if all_ok else 'Some checks FAILED ✗'}")
