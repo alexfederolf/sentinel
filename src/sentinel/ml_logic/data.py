@@ -60,7 +60,7 @@ def load_train(path: Path = RAW_DIR / "train.parquet") -> pd.DataFrame:
         All 76 channel columns, 11 telecommand columns, ``id``, and
         ``is_anomaly`` label.
     """
-    return read_parquet_float32(path) #pd.read_parquet(path)
+    return pd.read_parquet(path) #read_parquet_float32(path)
 
 
 def load_test(path: Path = RAW_DIR / "test.parquet") -> pd.DataFrame:
@@ -77,7 +77,7 @@ def load_test(path: Path = RAW_DIR / "test.parquet") -> pd.DataFrame:
     pd.DataFrame
         Same structure as train minus the label column.
     """
-    return read_parquet_float32(path) #pd.read_parquet(path)
+    return pd.read_parquet(path) #read_parquet_float32(path)
 
 
 def load_target_channels(path: Path = RAW_DIR / "target_channels.csv") -> list[str]:
