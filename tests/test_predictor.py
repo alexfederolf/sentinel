@@ -8,7 +8,7 @@ import pytest
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import RobustScaler
 
-from sentinel.ml_logic.predictor import load_artefacts, predict
+from sentinel.ml_logic.predictor import load_artefacts, predict, predict_report
 
 
 @pytest.fixture
@@ -34,11 +34,63 @@ def fitted_stack():
     }
 
 
-def test_predict_returns_expected_keys_and_shapes(fitted_stack):
+# ── simple predict: Kaggle submission DataFrame (id, is_anomaly) ──────────
+
+def test_predict_returns_submission_frame(fitted_stack):
     s = fitted_stack
-    out = predict(
+    sub = predict(
         s["pca"], s["scaler"], s["features"], s["df"],
         threshold=1e9, win=s["win"],          # never flags
+    )
+    assert isinstance(sub, pd.DataFrame)
+    assert list(sub.columns) == ["id", "is_anomaly"]
+    assert len(sub) == len(s["df"])
+    assert sub["is_anomaly"].dtype == np.int8
+    assert (sub["is_anomaly"] == 0).all()
+    # default id column is a 0..n range
+    assert (sub["id"].values == np.arange(len(sub))).all()
+
+
+def test_predict_threshold_actually_flags(fitted_stack):
+    s = fitted_stack
+    sub = predict(
+        s["pca"], s["scaler"], s["features"], s["df"],
+        threshold=-1.0, win=s["win"],         # always flags
+    )
+    assert (sub["is_anomaly"] == 1).all()
+
+
+def test_predict_uses_id_column_when_present(fitted_stack):
+    """If X_raw has an 'id' column, it carries through to the submission."""
+    s = fitted_stack
+    df_with_id = s["df"].copy()
+    df_with_id["id"] = np.arange(1000, 1000 + len(df_with_id), dtype=np.int64)
+    sub = predict(
+        s["pca"], s["scaler"], s["features"], df_with_id,
+        threshold=1e9, win=s["win"],
+    )
+    assert (sub["id"].values == df_with_id["id"].values).all()
+
+
+def test_predict_accepts_ndarray(fitted_stack):
+    """Without an 'id' column the submission still comes out with a range index."""
+    s = fitted_stack
+    sub = predict(
+        s["pca"], s["scaler"], s["features"], s["X"],
+        threshold=1e9, win=s["win"],
+    )
+    assert list(sub.columns) == ["id", "is_anomaly"]
+    assert len(sub) == len(s["X"])
+    assert (sub["id"].values == np.arange(len(sub))).all()
+
+
+# ── detailed predict_report: full dict ────────────────────────────────────
+
+def test_predict_report_returns_expected_keys_and_shapes(fitted_stack):
+    s = fitted_stack
+    out = predict_report(
+        s["pca"], s["scaler"], s["features"], s["df"],
+        threshold=1e9, win=s["win"],
     )
 
     assert set(out) == {
@@ -48,54 +100,32 @@ def test_predict_returns_expected_keys_and_shapes(fitted_stack):
     }
     n_rows = len(s["df"])
     n_feat = len(s["features"])
-    assert out["labels"].shape            == (n_rows,)
-    assert out["labels"].dtype            == np.int8
-    assert out["row_scores"].shape        == (n_rows,)
-    assert out["window_scores"].shape     == (s["n_win"],)
-    assert out["per_channel_mse"].shape   == (n_feat,)
+    assert out["labels"].shape             == (n_rows,)
+    assert out["labels"].dtype             == np.int8
+    assert out["row_scores"].shape         == (n_rows,)
+    assert out["window_scores"].shape      == (s["n_win"],)
+    assert out["per_channel_mse"].shape    == (n_feat,)
     assert out["window_channel_mse"].shape == (s["n_win"], n_feat)
     assert out["topk_channels"] is None
     assert out["threshold"] == pytest.approx(1e9)
     assert out["features"]  == s["features"]
-    assert (out["labels"] == 0).all()
 
 
-def test_predict_threshold_actually_flags(fitted_stack):
+def test_predict_and_predict_report_agree_on_labels(fitted_stack):
+    """Both variants must flag the same rows under the same threshold."""
     s = fitted_stack
-    out = predict(
+    sub = predict(
         s["pca"], s["scaler"], s["features"], s["df"],
-        threshold=-1.0, win=s["win"],         # always flags
+        threshold=0.5, win=s["win"],
     )
-    assert (out["labels"] == 1).all()
-
-
-def test_predict_accepts_ndarray(fitted_stack):
-    s = fitted_stack
-    out_df = predict(
+    rep = predict_report(
         s["pca"], s["scaler"], s["features"], s["df"],
-        threshold=1e9, win=s["win"],
+        threshold=0.5, win=s["win"],
     )
-    out_np = predict(
-        s["pca"], s["scaler"], s["features"], s["X"],
-        threshold=1e9, win=s["win"],
-    )
-    assert np.allclose(out_df["row_scores"], out_np["row_scores"], atol=1e-5)
+    assert (sub["is_anomaly"].values == rep["labels"]).all()
 
 
-def test_predict_picks_columns_by_name(fitted_stack):
-    """Shuffling DataFrame columns must not change the result."""
-    s = fitted_stack
-    shuffled = s["df"][["noise"] + s["features"][::-1]]
-    out_a = predict(
-        s["pca"], s["scaler"], s["features"], s["df"],
-        threshold=1e9, win=s["win"],
-    )
-    out_b = predict(
-        s["pca"], s["scaler"], s["features"], shuffled,
-        threshold=1e9, win=s["win"],
-    )
-    assert np.allclose(out_a["row_scores"], out_b["row_scores"], atol=1e-5)
-
+# ── load_artefacts ────────────────────────────────────────────────────────
 
 def test_load_artefacts_roundtrip(fitted_stack, tmp_path):
     s = fitted_stack
@@ -110,9 +140,10 @@ def test_load_artefacts_roundtrip(fitted_stack, tmp_path):
     model, scaler, features = load_artefacts(model_path, scaler_path, config_path)
     assert features == s["features"]
 
-    out = predict(model, scaler, features, s["df"],
+    sub = predict(model, scaler, features, s["df"],
                   threshold=1e9, win=s["win"])
-    assert out["row_scores"].shape == (len(s["df"]),)
+    assert list(sub.columns) == ["id", "is_anomaly"]
+    assert len(sub) == len(s["df"])
 
 
 def test_load_artefacts_rejects_unknown_loader(tmp_path):

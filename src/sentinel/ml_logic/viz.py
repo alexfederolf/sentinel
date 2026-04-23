@@ -14,6 +14,7 @@ plot_distributions                — per-channel KDE histograms (nominal vs ano
 plot_correlation                  — Pearson correlation heatmap across channels
 plot_score_distribution           — score histograms split by true label + threshold
 plot_score_timeline               — score vs row index with threshold + GT shading
+plot_score_panels                 — 3-panel: scores, true anomalies, predicted anomalies
 plot_event_zoom_with_score        — channel zoom plus PCA score panel
 plot_confusion_and_channel_errors — confusion matrix + top-k channel MSE bar chart
 """
@@ -374,10 +375,92 @@ def plot_score_timeline(
 
     ax.set_xlabel("Row index", fontsize=9)
     ax.set_ylabel("Anomaly score", fontsize=9)
-    ax.set_title("Score timeline (red = true anomaly segments)",
+    ax.set_title("Score timeline",
                  fontsize=11, fontweight="bold")
     anom_patch = mpatches.Patch(color=ANOMALY_COLOR, alpha=0.4, label="True anomaly")
     ax.legend(handles=[anom_patch, ax.get_lines()[-1]], fontsize=8, loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
+def plot_score_panels(
+    scores: np.ndarray,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    threshold: float,
+    index: np.ndarray | None = None,
+    figsize: tuple = (18, 6),
+    sample_frac: float | None = None,
+) -> plt.Figure:
+    """
+    Three stacked panels sharing the same x-axis:
+
+        1. Row-level reconstruction error (score) with the threshold line
+        2. Ground-truth anomaly ribbon
+        3. Predicted anomaly ribbon
+
+    Splitting scores from labels makes it visually obvious where the model
+    over- or under-fires compared to ground truth — something the overlaid
+    ``plot_score_timeline`` can hide when shaded regions pile up.
+
+    Parameters
+    ----------
+    scores      : (n_rows,) row-level anomaly score
+    y_true      : (n_rows,) 0/1 ground-truth labels
+    y_pred      : (n_rows,) 0/1 predicted labels (same threshold that is drawn)
+    threshold   : decision threshold (horizontal line on the score panel)
+    index       : x-axis values, e.g. ``df.index.values``. Defaults to ``np.arange(n_rows)``.
+    figsize     : figure size (width, total height)
+    sample_frac : optional random sub-sample (seed=42) to keep huge arrays responsive
+
+    Returns
+    -------
+    fig : matplotlib Figure
+    """
+    scores = np.asarray(scores, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.int8)
+    y_pred = np.asarray(y_pred, dtype=np.int8)
+    if index is None:
+        index = np.arange(len(scores))
+    else:
+        index = np.asarray(index)
+
+    if sample_frac is not None and 0 < sample_frac < 1:
+        rng = np.random.default_rng(42)
+        keep = rng.random(len(scores)) < sample_frac
+        sel = np.sort(np.where(keep)[0])
+        index, scores, y_true, y_pred = index[sel], scores[sel], y_true[sel], y_pred[sel]
+
+    sns.set_style("whitegrid")
+    fig, (ax_s, ax_t, ax_p) = plt.subplots(
+        3, 1, figsize=figsize, sharex=True,
+        gridspec_kw={"height_ratios": [3, 1, 1]},
+    )
+
+    # Panel 1: reconstruction error + threshold
+    ax_s.plot(index, scores, lw=0.5, color=NOMINAL_COLOR, alpha=0.9)
+    ax_s.axhline(threshold, color="black", linestyle="--", linewidth=1.0,
+                 label=f"Threshold = {threshold:g}")
+    ax_s.set_ylabel("Reconstruction\nerror", fontsize=9)
+    ax_s.set_title("Score timeline — errors, ground truth, predictions",
+                   fontsize=11, fontweight="bold")
+    ax_s.legend(fontsize=8, loc="upper right")
+
+    # Panel 2: ground-truth ribbon
+    ax_t.fill_between(index, 0, y_true, step="pre",
+                      color=ANOMALY_COLOR, alpha=0.7, linewidth=0)
+    ax_t.set_ylim(-0.1, 1.1)
+    ax_t.set_yticks([0, 1])
+    ax_t.set_ylabel("True\nanomaly", fontsize=9)
+
+    # Panel 3: predicted ribbon
+    ax_p.fill_between(index, 0, y_pred, step="pre",
+                      color=ANOMALY_COLOR, alpha=0.7, linewidth=0)
+    ax_p.set_ylim(-0.1, 1.1)
+    ax_p.set_yticks([0, 1])
+    ax_p.set_ylabel("Predicted\nanomaly", fontsize=9)
+    ax_p.set_xlabel("Row index", fontsize=9)
+
     fig.tight_layout()
     return fig
 
@@ -489,16 +572,20 @@ def plot_confusion_and_channel_errors(
     fn = int(((y_pred == 0) & (y_true == 1)).sum())
     tn = int(((y_pred == 0) & (y_true == 0)).sum())
     cm = np.array([[tn, fp], [fn, tp]])
+    total = cm.sum()
+    # cell labels: raw count on top, percentage of all rows below
+    annot = np.array([[f"{v:,}\n{v / total:.1%}" for v in row] for row in cm])
 
     fig, (ax_cm, ax_bar) = plt.subplots(1, 2, figsize=figsize)
 
     sns.heatmap(
-        cm, ax=ax_cm, annot=True, fmt="d",
+        cm, ax=ax_cm, annot=annot, fmt="",
         cmap="Blues", cbar=False, square=True,
         xticklabels=["Pred 0", "Pred 1"],
         yticklabels=["True 0", "True 1"],
     )
-    ax_cm.set_title("Row-level confusion matrix", fontsize=11, fontweight="bold")
+    ax_cm.set_title(f"Row-level confusion matrix (n = {total:,})",
+                    fontsize=11, fontweight="bold")
 
     k = min(top_k, len(channel_names))
     order = np.argsort(per_channel_mse)[::-1][:k]
