@@ -15,3 +15,7 @@ seaborn~=0.13
 # Notebook & dev tools
 jupyter~=1.1
 pytest~=8.3
+
+# API
+fastapi~=0.115
+uvicorn~=0.34
