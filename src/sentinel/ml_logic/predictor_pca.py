@@ -1,9 +1,6 @@
-import json
-import pickle
-
 from ..params import PCA_THRESHOLD
 from .data import MODELS_DIR, PROCESSED_DIR
-from .predictor import predict as _predict
+from .predictor import load_artefacts, predict as _predict
 
 # Lazy cache so importing doesn't touch disk.
 _pca      = None
@@ -14,12 +11,11 @@ _features = None
 def _load():
     global _pca, _scaler, _features
     if _pca is None:
-        with open(MODELS_DIR / "pca.pkl", "rb") as f:
-            _pca = pickle.load(f)
-        with open(MODELS_DIR / "scaler.pkl", "rb") as f:
-            _scaler = pickle.load(f)
-        with open(PROCESSED_DIR / "preprocessing_config.json") as f:
-            _features = json.load(f)["target_channels"]
+        _pca, _scaler, _features = load_artefacts(
+            model_path  = MODELS_DIR / "pca.pkl",
+            scaler_path = MODELS_DIR / "scaler.pkl",
+            config_path = PROCESSED_DIR / "preprocessing_config.json",
+        )
 
 
 def predict(X_raw, threshold=PCA_THRESHOLD, return_scores=False):

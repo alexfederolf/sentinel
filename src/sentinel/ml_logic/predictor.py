@@ -1,10 +1,33 @@
 from __future__ import annotations
 
+import json
+import pickle
+
 import numpy as np
 import pandas as pd
 
 from ..params import WINDOW_SIZE
 from .scoring import score_report
+
+
+def load_artefacts(model_path, scaler_path, config_path, loader="pickle"):
+    # pickle for sklearn (PCA); keras for LSTM-AE / CNN-AE later on.
+    if loader == "pickle":
+        with open(model_path, "rb") as f:
+            model = pickle.load(f)
+    elif loader == "keras":
+        # lazy import so PCA-only code doesn't pay the tensorflow cost
+        from tensorflow.keras.models import load_model
+        model = load_model(model_path, compile=False)
+    else:
+        raise ValueError(f"Unknown loader {loader!r} — use 'pickle' or 'keras'")
+
+    with open(scaler_path, "rb") as f:
+        scaler = pickle.load(f)
+    with open(config_path) as f:
+        features = json.load(f)["target_channels"]
+
+    return model, scaler, features
 
 
 def predict(

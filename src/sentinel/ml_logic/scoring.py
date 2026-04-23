@@ -5,8 +5,8 @@ The models all follow the same scoring recipe:
 
     1. Reshape row-level data into non-overlapping windows.
     2. Reconstruct each window with the model.
-    3. Squared error → reduce to one number per window.
-    4. Broadcast each window score to its ``win`` rows (the tail inherits the
+    3. MSE → reduce to one number per window.
+    4. Broadcast each window score to its rows (the tail inherits the
        last full window's score).
 
 Two model backends are supported via duck typing:
@@ -20,9 +20,8 @@ Public API
 ----------
 score_windows                    row-level anomaly scores (threshold on these)
 window_scores_only               window-level scalar scores
-broadcast_window_scores_to_rows  broadcast helper (tail inherits last score)
-score_report                     single-pass, everything-at-once; use this for
-                                 the showcase / frontend / multi-plot notebooks
+broadcast_window_scores_to_rows  broadcast helper
+score_report                     single-pass, everything-at-once
 """
 from __future__ import annotations
 
@@ -116,10 +115,14 @@ def _window_scores_from_sq_err(
     if sq_err.size == 0:
         return np.zeros(0, dtype=np.float32)
     n_feat = sq_err.shape[2]
+
+    # PCA default: mean over all channels and time steps
     if topk is None:
         return sq_err.mean(axis=(1, 2)).astype(np.float32)
     if not 1 <= topk <= n_feat:
         raise ValueError(f"topk must be in [1, {n_feat}], got {topk}")
+
+    # LSTM/CNN failure mode: only a few channels show high MSE, so take the mean of the top-k per-channel MSEs
     per_channel = sq_err.mean(axis=1)                        # (n_win, n_feat)
     vals = np.partition(per_channel, -topk, axis=1)[:, -topk:]
     return vals.mean(axis=1).astype(np.float32)
@@ -144,11 +147,13 @@ def broadcast_window_scores_to_rows(
     """
     if len(win_scores) == 0:
         return np.zeros(n_rows, dtype=np.float32)
+    # repeat
     row_scores = np.repeat(win_scores.astype(np.float32), win)
     if len(row_scores) < n_rows:
         pad = np.full(n_rows - len(row_scores),
                       win_scores[-1], dtype=np.float32)
         row_scores = np.concatenate([row_scores, pad])
+
     return row_scores[:n_rows]
 
 
@@ -221,8 +226,8 @@ def score_report(
 ) -> dict:
     """
     One-pass report: runs the reconstruction once and derives every statistic
-    the showcase / frontend / multi-plot notebooks consume. Replaces the
-    pattern of calling ``score_windows`` for labels plus a hand-rolled PCA
+    the showcase / frontend / multi-plot. Replaces the
+    pattern of ``score_windows`` for labels plus a hand-rolled PCA
     loop for per-channel MSE.
 
     Parameters
@@ -264,6 +269,7 @@ def score_report(
     window_scores      = _window_scores_from_sq_err(sq_err, topk=topk)
     row_scores         = broadcast_window_scores_to_rows(window_scores, n_rows, win)
 
+    # topk for LSTM-AE
     topk_channels = None
     if topk is not None:
         # indices of the k largest channels per window (unordered inside the slice)

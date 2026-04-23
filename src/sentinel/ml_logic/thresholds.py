@@ -1,9 +1,9 @@
 """
 Threshold tuning for reconstruction-based anomaly detection.
 
-Sweeps a log-spaced range of candidate thresholds, evaluates a user-supplied
+Sweeps a log-spaced range of candidate thresholds, evaluates a
 event-wise metric on each, and returns the argmax. The metric is a
-first-class argument — pass ``event_f05`` for the primary bootcamp metric,
+first-class argument — pass ``event_f05`` for the primary  metric,
 ``esa_metric`` to reproduce Kaggle-leaderboard ranking, or any other metric
 that returns a dict with an ``f_score`` key (or a bare scalar via
 ``score_key=None``).

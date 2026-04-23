@@ -38,14 +38,3 @@ data/raw/
 ```
 
 ---
-
-## Running the Notebooks
-
-Run in this order, each notebook saves outputs that the next one loads:
-
-| # | Notebook | Description |
-|---|---|---|
-| 01 | `notebooks/01-eda.ipynb` | Exploratory data analysis |
-| 02 | `notebooks/02-preprocessing.ipynb` | Scaling and windowing |
-| 03 | `notebooks/03-baseline_iforest.ipynb` | Isolation Forest |
-| 04 | `notebooks/04-baseline_pca.ipynb` | PCA reconstruction — best model |

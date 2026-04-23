@@ -1,11 +1,14 @@
-"""Smoke tests for sentinel.ml_logic.predictor.predict."""
+"""Smoke tests for sentinel.ml_logic.predictor."""
+import json
+import pickle
+
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import RobustScaler
 
-from sentinel.ml_logic.predictor import predict
+from sentinel.ml_logic.predictor import load_artefacts, predict
 
 
 @pytest.fixture
@@ -92,3 +95,27 @@ def test_predict_picks_columns_by_name(fitted_stack):
         threshold=1e9, win=s["win"],
     )
     assert np.allclose(out_a["row_scores"], out_b["row_scores"], atol=1e-5)
+
+
+def test_load_artefacts_roundtrip(fitted_stack, tmp_path):
+    s = fitted_stack
+    model_path  = tmp_path / "pca.pkl"
+    scaler_path = tmp_path / "scaler.pkl"
+    config_path = tmp_path / "preprocessing_config.json"
+    with open(model_path, "wb")  as f: pickle.dump(s["pca"],    f)
+    with open(scaler_path, "wb") as f: pickle.dump(s["scaler"], f)
+    with open(config_path, "w")  as f:
+        json.dump({"target_channels": s["features"]}, f)
+
+    model, scaler, features = load_artefacts(model_path, scaler_path, config_path)
+    assert features == s["features"]
+
+    out = predict(model, scaler, features, s["df"],
+                  threshold=1e9, win=s["win"])
+    assert out["row_scores"].shape == (len(s["df"]),)
+
+
+def test_load_artefacts_rejects_unknown_loader(tmp_path):
+    with pytest.raises(ValueError):
+        load_artefacts(tmp_path / "x", tmp_path / "y", tmp_path / "z",
+                       loader="onnx")

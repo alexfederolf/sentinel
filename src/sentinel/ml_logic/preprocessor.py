@@ -83,7 +83,7 @@ def create_windows(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Default pipeline — three-way labelled split (was run_preprocessing_bootcamp)
+# Default pipeline — three-way labelled split
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _snap_to_nominal(labels: np.ndarray, target: int) -> int:
@@ -106,11 +106,7 @@ def run_preprocessing(
 ) -> None:
     """
     Three-way chronological labeled split of train.parquet:
-    70 % train / 15 % val / 15 % test_intern (defaults).
-
-    Everything is labeled — `test_intern` is the local "private leaderboard"
-    that the modelling notebooks evaluate against so they don't have to ship
-    blind to Kaggle to know whether a change helped.
+    70 % train / 15 % val / 15 % test_intern (defaults), everything is labeled
 
     Cuts are snapped forward to the nearest nominal row so no true event is
     sliced across splits. RobustScaler is fit on **nominal training rows
@@ -121,7 +117,6 @@ def run_preprocessing(
     Parameters
     ----------
     train_ratio, val_ratio : float
-        Train / val fractions. test_intern gets the remainder.
 
     Writes
     ------
@@ -133,7 +128,6 @@ def run_preprocessing(
         y_val.npy                (1D)
         test_intern_scaled.npy   (2D)
         y_test_intern.npy        (1D)
-        scaler.pkl               (RobustScaler fit on nominal training rows)
         preprocessing_config.json (indices, shapes, ratios)
     """
     assert 0.0 < train_ratio < 1.0, f"train_ratio out of range: {train_ratio}"
@@ -192,7 +186,7 @@ def run_preprocessing(
     scaler = RobustScaler()
     scaler.fit(nom_train_slice[target_channels].values.astype(np.float32))
 
-    scaler_path = OUT_DIR / "scaler.pkl"
+    scaler_path = MODELS_DIR / "scaler.pkl"
     with open(scaler_path, "wb") as f:
         pickle.dump(scaler, f)
     print(f"  scaler saved → {scaler_path}")
@@ -213,6 +207,8 @@ def run_preprocessing(
         nom_train_slice[target_channels].values.astype(np.float32)
     ).astype(np.float32)
 
+    test_intern_raw = test_intern_slice[target_channels].values.astype(np.float32)
+
     del train, train_slice, val_slice, test_intern_slice, nom_train_slice
     gc.collect()
 
@@ -231,6 +227,7 @@ def run_preprocessing(
         "val_scaled.npy"         : val_scaled,
         "y_val.npy"              : y_val,
         "test_intern_scaled.npy" : test_intern_scaled,
+        "test_intern_raw.npy"    : test_intern_raw,
         "y_test_intern.npy"      : y_test_intern,
     }
     total = 0
@@ -301,8 +298,7 @@ def run_preprocessing(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Kaggle submission pipeline — two-way split + Kaggle test set
-# (was run_preprocessing — kept as a separate entry-point for submissions)
+# Kaggle submission pipeline — two-way split (train, val) + Kaggle test set
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_preprocessing_kaggle() -> None:
