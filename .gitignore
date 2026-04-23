@@ -60,3 +60,4 @@ secrets.toml
 
 scripts/
 reports/
+notebooks/cache/
