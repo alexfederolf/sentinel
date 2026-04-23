@@ -38,11 +38,11 @@ data/processed/
 
 
 # ── Saved models ─────────────────────────────────────────────────────────────
-#models/*.keras
-#models/*.pkl
-#models/*.json
-#models/*.h5
-#models/*.joblib
+models/*.keras
+models/*.pkl
+models/*.json
+models/*.h5
+models/*.joblib
 !models/.gitkeep
 #*.pickle
 #*.pckl
