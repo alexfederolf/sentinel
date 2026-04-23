@@ -1,14 +1,11 @@
 """Smoke tests for sentinel.ml_logic.predictor."""
-import json
-import pickle
-
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import RobustScaler
 
-from sentinel.ml_logic.predictor import load_artefacts, predict, predict_report
+from sentinel.ml_logic.predictor import _load, predict, predict_report
 
 
 @pytest.fixture
@@ -47,7 +44,6 @@ def test_predict_returns_submission_frame(fitted_stack):
     assert len(sub) == len(s["df"])
     assert sub["is_anomaly"].dtype == np.int8
     assert (sub["is_anomaly"] == 0).all()
-    # default id column is a 0..n range
     assert (sub["id"].values == np.arange(len(sub))).all()
 
 
@@ -73,7 +69,6 @@ def test_predict_uses_id_column_when_present(fitted_stack):
 
 
 def test_predict_accepts_ndarray(fitted_stack):
-    """Without an 'id' column the submission still comes out with a range index."""
     s = fitted_stack
     sub = predict(
         s["pca"], s["scaler"], s["features"], s["X"],
@@ -92,7 +87,6 @@ def test_predict_report_returns_expected_keys_and_shapes(fitted_stack):
         s["pca"], s["scaler"], s["features"], s["df"],
         threshold=1e9, win=s["win"],
     )
-
     assert set(out) == {
         "labels", "row_scores", "window_scores",
         "per_channel_mse", "window_channel_mse", "topk_channels",
@@ -125,28 +119,16 @@ def test_predict_and_predict_report_agree_on_labels(fitted_stack):
     assert (sub["is_anomaly"].values == rep["labels"]).all()
 
 
-# ── load_artefacts ────────────────────────────────────────────────────────
+# ── _load: defaults only fill in what's missing ──────────────────────────
 
-def test_load_artefacts_roundtrip(fitted_stack, tmp_path):
+def test_load_passes_through_explicit_values(fitted_stack):
+    """When every argument is supplied, _load returns them untouched — no disk hit."""
     s = fitted_stack
-    model_path  = tmp_path / "pca.pkl"
-    scaler_path = tmp_path / "scaler.pkl"
-    config_path = tmp_path / "preprocessing_config.json"
-    with open(model_path, "wb")  as f: pickle.dump(s["pca"],    f)
-    with open(scaler_path, "wb") as f: pickle.dump(s["scaler"], f)
-    with open(config_path, "w")  as f:
-        json.dump({"target_channels": s["features"]}, f)
-
-    model, scaler, features = load_artefacts(model_path, scaler_path, config_path)
+    model, scaler, features, X_raw = _load(
+        model=s["pca"], scaler=s["scaler"],
+        features=s["features"], X_raw=s["X"],
+    )
+    assert model    is s["pca"]
+    assert scaler   is s["scaler"]
     assert features == s["features"]
-
-    sub = predict(model, scaler, features, s["df"],
-                  threshold=1e9, win=s["win"])
-    assert list(sub.columns) == ["id", "is_anomaly"]
-    assert len(sub) == len(s["df"])
-
-
-def test_load_artefacts_rejects_unknown_loader(tmp_path):
-    with pytest.raises(ValueError):
-        load_artefacts(tmp_path / "x", tmp_path / "y", tmp_path / "z",
-                       loader="onnx")
+    assert X_raw    is s["X"]

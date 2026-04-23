@@ -46,5 +46,6 @@ NOMINAL_COLOR = '#2980b9'
 
 # ── Trained model thresholds ──────────────────────────────────────────────────
 # Tuned on val set with event-wise F0.5
-PCA_THRESHOLD = 0.060219   # from pca-full: PCA k=39, all 92k nominal windows
-PCA_THRESHOLD = 0.060404   # from pca: PCA k=39, 35k nominal windows (70 % of 50k)
+PCA_THRESHOLD  = 0.060219   # from pca-full: PCA k=39, all 92k nominal windows
+PCA_THRESHOLD  = 0.060404   # from pca: PCA k=39, 35k nominal windows (70 % of 50k)
+LSTM_THRESHOLD = 1.323612   # from 12-lstm_ae latest run, topk=5, val event-F0.5 0.7143

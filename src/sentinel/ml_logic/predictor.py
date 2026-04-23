@@ -1,69 +1,77 @@
+"""
+Two public entry points:
+    * predict         — Kaggle-style (id, is_anomaly) DataFrame
+    * predict_report  — full dict for the NB 15 showcase plots
+
+Every argument is optional. Anything left as ``None`` is loaded from the defaults:
+    model    : models/lstm_ae.keras
+    scaler   : models/scaler.pkl
+    features : data/raw/target_channels.csv
+    X_raw    : data/processed/test_intern_raw.npy
+
+``WINDOW_SIZE`` and ``LSTM_THRESHOLD`` default to the values in
+``sentinel.params``.
+"""
 from __future__ import annotations
 
-import json
 import pickle
 
 import numpy as np
 import pandas as pd
 
-from ..params import WINDOW_SIZE
+from ..params import LSTM_THRESHOLD, WINDOW_SIZE
+from .data import MODELS_DIR, PROCESSED_DIR, load_target_channels
 from .scorer import score_report, score_windows
 
-# helper to load all the artefacts needed for prediction (model, scaler, feature list)
-def load_artefacts(model_path, scaler_path, config_path, loader="pickle"):
 
-    # pickle for sklearn (PCA); keras for LSTM-AE / CNN-AE later on.
-    if loader == "pickle":
-        with open(model_path, "rb") as f:
-            model = pickle.load(f)
-
-    # keras for LSTM/CNN AE
-    elif loader == "keras":
-        # lazy import so PCA doesn't pay the tensorflow cost
+# ── internal helpers ──────────────────────────────────────────────────────
+def _load(model=None, scaler=None, features=None, X_raw=None):
+    """Fill in any missing artefact from the bootcamp defaults."""
+    if model is None:
+        # lazy import so PCA-only callers don't pay the tensorflow cost
         from tensorflow.keras.models import load_model
-        model = load_model(model_path, compile=False)
-    else:
-        raise ValueError(f"Unknown loader {loader!r} — use 'pickle' or 'keras'")
-
-    with open(scaler_path, "rb") as f:
-        scaler = pickle.load(f)
-
-    with open(config_path) as f:
-        features = json.load(f)["target_channels"]
-
-    return model, scaler, features
+        model = load_model(MODELS_DIR / "lstm_ae.keras", compile=False)
+    if scaler is None:
+        with open(MODELS_DIR / "scaler.pkl", "rb") as f:
+            scaler = pickle.load(f)
+    if features is None:
+        features = load_target_channels()
+    if X_raw is None:
+        X_raw = np.load(PROCESSED_DIR / "test_intern_raw.npy")
+    return model, scaler, list(features), X_raw
 
 
 def _scale(scaler, features, X_raw):
-
-    # DataFrame → pick the right columns in the right order
+    # DataFrame: pick columns in the right order. ndarray: assume feature order.
     if isinstance(X_raw, pd.DataFrame):
         X = X_raw[features].values
-
-    # ndarray is assumed to already be in feature order
     else:
         X = np.asarray(X_raw)
     X = X.astype(np.float32, copy=False)
-
     return scaler.transform(X).astype(np.float32)
 
 
-# simple variant: Kaggle-style submission (id, is_anomaly)
+# ── public API ────────────────────────────────────────────────────────────
 def predict(
-    model,
-    scaler,
-    features: list[str],
-    X_raw,
-    threshold: float,
+    model=None,
+    scaler=None,
+    features=None,
+    X_raw=None,
+    threshold: float = LSTM_THRESHOLD,
     win: int = WINDOW_SIZE,
 ) -> pd.DataFrame:
+    """
+    Output: DataFrame with columns ``id`` and ``is_anomaly``.
+
+    Pass nothing to run the default LSTM-AE pipeline on test_intern; pass any
+    subset of artefacts to override individual defaults.
+    """
+    model, scaler, features, X_raw = _load(model, scaler, features, X_raw)
     X_scaled = _scale(scaler, features, X_raw)
 
-    # score_windows = row-level MSE, broadcast from window scores
     row_scores = score_windows(model, X_scaled, win=win)
     labels = (row_scores > threshold).astype(np.int8)
 
-    # id column: prefer X_raw['id'] if present, else a 0..n range
     if isinstance(X_raw, pd.DataFrame) and "id" in X_raw.columns:
         ids = X_raw["id"].values
     else:
@@ -72,19 +80,19 @@ def predict(
     return pd.DataFrame({"id": ids, "is_anomaly": labels})
 
 
-# detailed variant: full dict for the showcase plots (per-channel, MSE, etc.)
 def predict_report(
-    model,
-    scaler,
-    features: list[str],
-    X_raw,
-    threshold: float,
+    model=None,
+    scaler=None,
+    features=None,
+    X_raw=None,
+    threshold: float = LSTM_THRESHOLD,
     win: int = WINDOW_SIZE,
     topk: int | None = None,
 ) -> dict:
+    """Full dict for the NB 15 showcase plots. Same defaults as ``predict``."""
+    model, scaler, features, X_raw = _load(model, scaler, features, X_raw)
     X_scaled = _scale(scaler, features, X_raw)
 
-    # score_report does reconstruction + MSE + broadcast in one pass
     rep = score_report(model, X_scaled, win=win, topk=topk)
     labels = (rep["row_scores"] > threshold).astype(np.int8)
 
