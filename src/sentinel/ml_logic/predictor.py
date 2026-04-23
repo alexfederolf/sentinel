@@ -24,7 +24,7 @@ from .data import MODELS_DIR, PROCESSED_DIR, load_target_channels
 from .scorer import score_report, score_windows
 
 
-# ── internal helpers ──────────────────────────────────────────────────────
+# ── internal load function: loads everything internal  ────────────────────────
 def _load(model=None, scaler=None, features=None, X_raw=None):
     """Fill in any missing artefact from the bootcamp defaults."""
     if model is None:
@@ -80,6 +80,7 @@ def predict(
     return pd.DataFrame({"id": ids, "is_anomaly": labels})
 
 
+# WIP extension for showcase plots
 def predict_report(
     model=None,
     scaler=None,
@@ -89,7 +90,6 @@ def predict_report(
     win: int = WINDOW_SIZE,
     topk: int | None = None,
 ) -> dict:
-    """Full dict for the NB 15 showcase plots. Same defaults as ``predict``."""
     model, scaler, features, X_raw = _load(model, scaler, features, X_raw)
     X_scaled = _scale(scaler, features, X_raw)
 
