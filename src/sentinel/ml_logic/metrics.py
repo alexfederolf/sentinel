@@ -109,11 +109,14 @@ def corrected_event_f05(
 
     if precision + recall == 0:
         f_score = 0.0
+        f1 = 0.0
     else:
         f_score = (1 + beta**2) * precision * recall / (beta**2 * precision + recall)
+        f1 = 2 * precision * recall / (precision + recall)
 
     return {
         "f_score"       : round(f_score,    6),
+        "f1"            : round(f1,    6),
         "precision"     : round(precision,  6),
         "recall"        : round(recall,     6),
         "tp_events"     : tp_events,
