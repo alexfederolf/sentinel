@@ -17,7 +17,10 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from sentinel.ml_logic.predictor import predict as run_predict
+from sentinel.ml_logic.predictor import predict
+from sentinel.ml_logic.registry import load_scaler
+from sentinel.ml_logic.registry import load_model
+
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -25,6 +28,12 @@ app = FastAPI(
     description="ESA satellite telemetry anomaly detector",
     version="1.0.0",
 )
+
+@app.on_event("startup")
+def load_resources():
+    app.state.model  = load_model("pca")
+    app.state.scaler = load_scaler()
+    print("✅ Model and scaler ready")
 
 # ── Request / Response schemas ────────────────────────────────────────────────
 class PredictRequest(BaseModel):
@@ -61,39 +70,40 @@ def root():
     }
 
 
-@app.post("/predict", response_model=PredictResponse)
-def predict_endpoint(request: PredictRequest):
+#@app.post("/predict") #, response_model=PredictResponse)
+@app.get("/predict")
+def predict_endpoint(): #request: PredictRequest):
     """
     Full prediction pipeline — delegates to predictor.predict()
     1. Receive raw sensor rows from user
     2. predictor.py handles: preprocess → load model → score → threshold
     3. Return results as a dict
     """
-    if len(request.rows) == 0:
-        raise HTTPException(status_code=400, detail="No rows provided")
+    # if len(request.rows) == 0:
+    #     raise HTTPException(status_code=400, detail="No rows provided")
 
-    n_feat = len(request.rows[0])
-    if n_feat != 58:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Expected 58 features per row, got {n_feat}"
-        )
+    # n_feat = len(request.rows[0])
+    # if n_feat != 58:
+    #     raise HTTPException(
+    #         status_code=400,
+    #         detail=f"Expected 58 features per row, got {n_feat}"
+    #     )
 
-    X_raw = np.array(request.rows, dtype=np.float32)
+    # X_raw = np.array(request.rows, dtype=np.float32)
 
-    # delegates everything to predictor.py
-    result = run_predict(X_raw=X_raw)
+    # # delegates everything to predictor.py
+    # result = run_predict(X_raw=X_raw)
 
-    predictions = result["is_anomaly"].tolist()
-    n_anomalies = int(sum(predictions))
-    anomaly_rate = round(n_anomalies / len(predictions), 4)
+    # predictions = result["is_anomaly"].tolist()
+    # n_anomalies = int(sum(predictions))
+    # anomaly_rate = round(n_anomalies / len(predictions), 4)
 
-    return PredictResponse(
-        predictions=predictions,
-        n_anomalies=n_anomalies,
-        anomaly_rate=anomaly_rate,
-    )
-
+    # return PredictResponse(
+    #     predictions=predictions,
+    #     n_anomalies=n_anomalies,
+    #     anomaly_rate=anomaly_rate,
+    # )
+    return predict(model = app.state.model, scaler = app.state.scaler).to_dict()
 
 
 
