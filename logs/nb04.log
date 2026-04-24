@@ -1,0 +1,81 @@
+[NbConvertApp] Converting notebook notebooks/04-baseline_pca.ipynb to notebook
+Traceback (most recent call last):
+  File "/Users/helena.schulz.ext/.pyenv/versions/sentinel/bin/jupyter-nbconvert", line 6, in <module>
+    sys.exit(main())
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/jupyter_core/application.py", line 284, in launch_instance
+    super().launch_instance(argv=argv, **kwargs)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/traitlets/config/application.py", line 1075, in launch_instance
+    app.start()
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/nbconvertapp.py", line 420, in start
+    self.convert_notebooks()
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/nbconvertapp.py", line 597, in convert_notebooks
+    self.convert_single_notebook(notebook_filename)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/nbconvertapp.py", line 563, in convert_single_notebook
+    output, resources = self.export_single_notebook(
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/nbconvertapp.py", line 487, in export_single_notebook
+    output, resources = self.exporter.from_filename(
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/exporters/exporter.py", line 201, in from_filename
+    return self.from_file(f, resources=resources, **kw)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/exporters/exporter.py", line 220, in from_file
+    return self.from_notebook_node(
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/exporters/notebook.py", line 36, in from_notebook_node
+    nb_copy, resources = super().from_notebook_node(nb, resources, **kw)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/exporters/exporter.py", line 154, in from_notebook_node
+    nb_copy, resources = self._preprocess(nb_copy, resources)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/exporters/exporter.py", line 353, in _preprocess
+    nbc, resc = preprocessor(nbc, resc)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/preprocessors/base.py", line 48, in __call__
+    return self.preprocess(nb, resources)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/preprocessors/execute.py", line 103, in preprocess
+    self.preprocess_cell(cell, resources, index)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbconvert/preprocessors/execute.py", line 124, in preprocess_cell
+    cell = self.execute_cell(cell, index, store_history=True)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/jupyter_core/utils/__init__.py", line 165, in wrapped
+    return loop.run_until_complete(inner)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/lib/python3.10/asyncio/base_events.py", line 646, in run_until_complete
+    return future.result()
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbclient/client.py", line 1062, in async_execute_cell
+    await self._check_raise_for_error(cell, cell_index, exec_reply)
+  File "/Users/helena.schulz.ext/.pyenv/versions/3.10.6/envs/sentinel/lib/python3.10/site-packages/nbclient/client.py", line 918, in _check_raise_for_error
+    raise CellExecutionError.from_cell_and_msg(cell, exec_reply_content)
+nbclient.exceptions.CellExecutionError: An error occurred while executing the following cell:
+------------------
+# ── Per-event detection table ─────────────────────────────────────────────────
+y_pred_val = (scores_val >= BEST_THR).astype(np.int8)
+
+event_rows = []
+for seg in val_segments:
+    pred_in_seg = y_pred_val[seg['start']:seg['end']+1]
+    n_det = int(pred_in_seg.sum())
+    event_rows.append({
+        'start'        : seg['start'],
+        'end'          : seg['end'],
+        'length'       : seg['length'],
+        'detected'     : n_det > 0,
+        'n_pred_in_seg': n_det,
+        'hit_rate'     : n_det / seg['length'],
+    })
+
+event_df   = pd.DataFrame(event_rows)
+n_detected = int(event_df['detected'].sum())
+n_missed   = int((~event_df['detected']).sum())
+
+print(f'Events detected : {n_detected} / {n_events}')
+print(f'Events missed   : {n_missed}')
+print()
+if n_missed > 0:
+    print('Missed events:')
+    print(event_df[~event_df['detected']][['start','end','length']].to_string(index=False))
+------------------
+
+
+[0;31m---------------------------------------------------------------------------[0m
+[0;31mNameError[0m                                 Traceback (most recent call last)
+Cell [0;32mIn[11], line 2[0m
+[1;32m      1[0m [38;5;66;03m# ── Per-event detection table ─────────────────────────────────────────────────[39;00m
+[0;32m----> 2[0m y_pred_val [38;5;241m=[39m (scores_val [38;5;241m>[39m[38;5;241m=[39m [43mBEST_THR[49m)[38;5;241m.[39mastype(np[38;5;241m.[39mint8)
+[1;32m      4[0m event_rows [38;5;241m=[39m []
+[1;32m      5[0m [38;5;28;01mfor[39;00m seg [38;5;129;01min[39;00m val_segments:
+
+[0;31mNameError[0m: name 'BEST_THR' is not defined
+

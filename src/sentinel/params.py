@@ -7,11 +7,15 @@ Import with:
 from pathlib import Path
 
 # ── Resource Paths ───────────────────────────────────────────────────────────
-DATA_DIR        = Path(__file__).resolve().parents[3] / "data"
+# params.py lives at src/sentinel/params.py, so the project root is parents[2]
+# (params.py → sentinel/ → src/ → <project root>). Note: ml_logic/data.py is one
+# level deeper and correctly uses parents[3] for the same project root.
+PROJECT_ROOT    = Path(__file__).resolve().parents[2]
+DATA_DIR        = PROJECT_ROOT / "data"
 RAW_DIR         = DATA_DIR / "raw"
 PROCESSED_DIR   = DATA_DIR / "processed"
-MODELS_DIR      = Path(__file__).resolve().parents[3] / "models"
-#SUBMISSIONS_DIR = Path(__file__).resolve().parents[3] / "submissions"
+MODELS_DIR      = PROJECT_ROOT / "models"
+#SUBMISSIONS_DIR = PROJECT_ROOT / "submissions"
 
 
 # ── Reproducibility ───────────────────────────────────────────────────────────
@@ -39,6 +43,12 @@ CV_FOLDS            = 5        # folds for temporal cross-validation
 BOOTCAMP_TRAIN_RATIO = 0.70
 BOOTCAMP_VAL_RATIO   = 0.15    # test_intern = 1 − TRAIN_RATIO − VAL_RATIO = 0.15
 
+# ── API demo slice (inside test_intern) ─────────────────────────────────────
+# Low-drift 150k-row window containing one ~1.5k-row anomaly event.
+# Used by the web-app API so inference is fast and the demo stays meaningful.
+API_SLICE_START = 350_000
+API_SLICE_END   = 500_000
+
 
 # ── Plot colours (consistent across all notebooks) ────────────────────────────
 ANOMALY_COLOR = '#e74c3c'
@@ -49,3 +59,10 @@ NOMINAL_COLOR = '#2980b9'
 #PCA_THRESHOLD = 0.060219   # from pca-full: PCA k=39, all 92k nominal windows
 PCA_THRESHOLD = 0.060404   # from pca: PCA k=39, 35k nominal windows (70 % of 50k)
 LSTM_THRESHOLD = 1.323612  # from lstm: LSTM k=16, 35k nominal windows (70 % of 50k)
+
+# Detrended-score thresholds (tuned on detrended val, see NB 20).
+# Use with sentinel.ml_logic.scorer.score_windows_detrended. The original
+# PCA_THRESHOLD / LSTM_THRESHOLD do NOT apply to detrended scores -- the
+# subtraction shifts the score distribution so the tuned value is different.
+PCA_DETRENDED_THRESHOLD  = None   # fill after first NB 20 run
+LSTM_DETRENDED_THRESHOLD = None

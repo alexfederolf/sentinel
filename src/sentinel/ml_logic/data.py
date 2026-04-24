@@ -18,7 +18,7 @@ DATA_DIR        = Path(__file__).resolve().parents[3] / "data"
 RAW_DIR         = DATA_DIR / "raw"
 PROCESSED_DIR   = DATA_DIR / "processed"
 MODELS_DIR      = Path(__file__).resolve().parents[3] / "models"
-SUBMISSIONS_DIR = Path(__file__).resolve().parents[3] / "submissions"
+SUBMISSIONS_DIR = Path(__file__).resolve().parents[3] / "kaggle" / "submissions"
 
 def load_train(path: Path = RAW_DIR / "train.parquet") -> pd.DataFrame:
     """
@@ -97,23 +97,17 @@ def find_anomaly_segments(labels: np.ndarray | pd.Series) -> list[dict]:
     """
     if isinstance(labels, pd.Series):
         labels = labels.values
+    y = np.asarray(labels, dtype=np.int8)
 
-    segments = []
-    in_anomaly = False
-    start = None
-
-    for i, v in enumerate(labels):
-        if v == 1 and not in_anomaly:
-            start = i
-            in_anomaly = True
-        elif v == 0 and in_anomaly:
-            segments.append({"start": start, "end": i - 1, "length": i - start})
-            in_anomaly = False
-
-    if in_anomaly:
-        segments.append({"start": start, "end": len(labels) - 1, "length": len(labels) - start})
-
-    return segments
+    # Sentinel-pad with 0s so every run of 1s produces a rising and a falling edge.
+    padded = np.concatenate(([0], y, [0]))
+    d      = np.diff(padded)
+    starts = np.where(d ==  1)[0]
+    ends   = np.where(d == -1)[0] - 1
+    return [
+        {"start": int(s), "end": int(e), "length": int(e - s + 1)}
+        for s, e in zip(starts, ends)
+    ]
 
 
 def get_channel_cols(df: pd.DataFrame) -> list[str]:

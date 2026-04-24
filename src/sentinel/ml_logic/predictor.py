@@ -80,7 +80,7 @@ def predict(
     return pd.DataFrame({"id": ids, "is_anomaly": labels})
 
 
-# WIP extension for showcase plots
+# WIP extension for showcase plots ─────────────────────────────────────────────
 def predict_report(
     model=None,
     scaler=None,

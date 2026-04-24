@@ -22,6 +22,7 @@ score_windows                    row-level anomaly scores (threshold on these)
 window_scores_only               window-level scalar scores
 broadcast_window_scores_to_rows  broadcast helper
 score_report                     single-pass, everything-at-once
+detrend_scores                   remove rolling baseline drift from a score array
 """
 from __future__ import annotations
 
@@ -294,3 +295,164 @@ def score_report(
         "window_channel_mse": window_channel_mse,
         "topk_channels"     : topk_channels,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Drift detrending for score arrays
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Reconstruction MSE on the ESA-ADB task inherits a slow baseline drift from
+# a ~14-channel subsystem that shifts regime between the val and test_intern
+# splits (see NB 18 Section 6). The symptom in NB 14: the row-score trace
+# step-changes mid-test and a val-tuned threshold flags everything past the
+# step. ``detrend_scores`` removes that baseline before thresholding.
+#
+# Two modes:
+#   mode="median"  — score - rolling_median(score)          (mean-drift only)
+#   mode="zscore"  — (score - rolling_median) / rolling_MAD (mean + variance)
+#
+# Use "median" first; switch to "zscore" only if the widening variance
+# diagnosed on channels 14/21/29 etc. still hurts after mean subtraction.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _rolling_median(x: np.ndarray, window: int) -> np.ndarray:
+    """
+    Centred rolling median with reflection at the edges.
+
+    Delegates to ``scipy.ndimage.median_filter``, which runs in bounded
+    memory regardless of window size — important for ~10⁷-row score
+    arrays where a striding-view + ``np.median`` would OOM.
+    """
+    if window <= 1:
+        return x.astype(np.float32, copy=True)
+    from scipy.ndimage import median_filter
+    return median_filter(x, size=window, mode="reflect").astype(np.float32, copy=False)
+
+
+def _rolling_mad(x: np.ndarray, median: np.ndarray, window: int) -> np.ndarray:
+    """
+    Rolling median-absolute-deviation matching the same window as ``_rolling_median``.
+
+    MAD is robust to anomaly spikes that would blow up a rolling std; that's
+    why we use it here instead of ``np.std`` for variance detrending.
+    """
+    if window <= 1:
+        return np.ones_like(x, dtype=np.float32)
+    abs_dev = np.abs(x - median)
+    return _rolling_median(abs_dev, window)
+
+
+def detrend_scores(
+    scores: np.ndarray,
+    window: int = 100_000,
+    mode: str = "median",
+    eps: float = 1e-6,
+) -> np.ndarray:
+    """
+    Remove a rolling baseline from a row-level score array.
+
+    Anomaly-detection thresholds become unstable when the score has a slow
+    drift: a val-tuned threshold that separates spikes from baseline on val
+    ends up below the drifted baseline on test, and the model flags the
+    entire drifted region. Subtracting a rolling baseline aligns the nominal
+    level across regimes so the threshold only reacts to excursions above
+    the local level.
+
+    Parameters
+    ----------
+    scores : (n_rows,) float array
+        Row-level anomaly scores (typically from ``score_windows``).
+    window : int, default 100_000
+        Rolling-window size. Should be larger than an expected anomaly event
+        (so events aren't absorbed into the baseline) and smaller than the
+        timescale of the drift itself. 50k–200k is a reasonable range for
+        ESA-ADB's ~15M-row timelines.
+    mode : {"median", "zscore"}, default "median"
+        * ``"median"`` — return ``scores - rolling_median(scores)``. Kills
+          mean-drift. Use first.
+        * ``"zscore"`` — return ``(scores - rolling_median) / (rolling_MAD + eps)``.
+          Also normalises variance drift. Use when channels also widen
+          (test_intern std_ratio ≫ 1, documented for channels 14/21/29 in NB 18).
+    eps : float, default 1e-6
+        Floor added to the MAD denominator in "zscore" mode to guard against
+        flat nominal regions where MAD is zero.
+
+    Returns
+    -------
+    detrended : (n_rows,) float32 array
+        Baseline-removed scores. The threshold should be re-tuned on the
+        detrended val scores — the old val threshold is not meaningful here.
+
+    Notes
+    -----
+    Backed by ``scipy.ndimage.median_filter`` (C implementation, bounded
+    memory). Safe to call on ~10⁷-row arrays with ``window=100_000`` without
+    blowing memory. Prefer per-split calls over a concatenated array — that
+    keeps the baseline estimate from leaking across regimes and avoids
+    cross-split smoothing near the boundary.
+    """
+    if mode not in ("median", "zscore"):
+        raise ValueError(f"mode must be 'median' or 'zscore', got {mode!r}")
+
+    x = np.asarray(scores, dtype=np.float32)
+    if x.ndim != 1:
+        raise ValueError(f"scores must be 1D, got shape {x.shape}")
+    if window < 1:
+        raise ValueError(f"window must be >= 1, got {window}")
+    window = min(window, len(x))  # clamp so we don't pad bigger than the array
+
+    base = _rolling_median(x, window)
+    if mode == "median":
+        return (x - base).astype(np.float32, copy=False)
+
+    scale = _rolling_mad(x, base, window) + eps
+    return ((x - base) / scale).astype(np.float32, copy=False)
+
+
+def detrend_window_scores(
+    win_scores: np.ndarray,
+    n_rows: int,
+    window: int = 1000,
+    mode: str = "median",
+    eps: float = 1e-6,
+    win: int = WINDOW_SIZE,
+) -> np.ndarray:
+    """
+    Detrend at window granularity, then broadcast back to rows.
+
+    Equivalent to ``detrend_scores(broadcast_window_scores_to_rows(...))``
+    but ~``win``x faster because the median filter runs on ``n_rows/win``
+    points instead of ``n_rows`` points. Numerically identical as long as
+    the score array is piecewise-constant (which it is, by construction
+    of ``broadcast_window_scores_to_rows``).
+
+    ``window`` here is measured in WINDOWS, not rows -- i.e. ``window=1000``
+    ~= 100k rows for ``win=100``. Pick it the same way you'd pick the
+    row-level window in ``detrend_scores``, divided by ``win``.
+    """
+    detrended_win = detrend_scores(win_scores, window=window, mode=mode, eps=eps)
+    return broadcast_window_scores_to_rows(detrended_win, n_rows, win=win)
+
+
+def score_windows_detrended(
+    model,
+    X_rows: np.ndarray,
+    win: int = WINDOW_SIZE,
+    batch: int = 256,
+    topk: int | None = None,
+    detrend_window: int = 1000,
+    detrend_mode: str = "median",
+) -> np.ndarray:
+    """
+    ``score_windows`` + window-level detrending in one call.
+
+    Convenience for the standard pipeline: reconstruct, score, subtract
+    rolling baseline, broadcast to rows. The returned array is
+    **threshold-ready** but the threshold must be re-tuned on the
+    detrended val output -- the pre-detrend threshold is meaningless here.
+    """
+    win_scores = window_scores_only(model, X_rows, win=win, batch=batch, topk=topk)
+    return detrend_window_scores(
+        win_scores, n_rows=X_rows.shape[0],
+        window=detrend_window, mode=detrend_mode, win=win,
+    )

@@ -15,6 +15,7 @@ plot_correlation                  — Pearson correlation heatmap across channel
 plot_score_distribution           — score histograms split by true label + threshold
 plot_score_timeline               — score vs row index with threshold + GT shading
 plot_score_panels                 — 3-panel: scores, true anomalies, predicted anomalies
+plot_timeline                     — 2-panel: MSE (linear/log x/y) + true/predicted ribbon
 plot_event_zoom_with_score        — channel zoom plus PCA score panel
 plot_confusion_and_channel_errors — confusion matrix + top-k channel MSE bar chart
 """
@@ -28,6 +29,7 @@ import matplotlib.patches as mpatches
 import seaborn as sns
 
 from ..params import ANOMALY_COLOR, NOMINAL_COLOR
+from .data import find_anomaly_segments
 
 
 def _shade_anomalies(ax: plt.Axes, index: np.ndarray, labels: np.ndarray) -> None:
@@ -597,6 +599,212 @@ def plot_confusion_and_channel_errors(
     ax_bar.set_ylabel("")
     ax_bar.set_title(f"Top {k} channels by reconstruction error",
                      fontsize=11, fontweight="bold")
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_timeline(
+    scores: np.ndarray,
+    y_true: np.ndarray,
+    threshold: float,
+    title: str = "Timeline",
+    ds: int = 500,
+    log_y: bool = False,
+    log_x: bool = False,
+    index: np.ndarray | None = None,
+    figsize: tuple = (17, 6),
+) -> plt.Figure:
+    """
+    Top panel: per-row MSE score with the decision threshold drawn as a dashed
+    line and true-anomaly bands shaded lightly across the full height.
+    Bottom panel: overlaid ribbons of *predicted* vs *true* anomaly labels,
+    so over-flagged nominal regions become immediately visible.
+
+    For the showcase, call with ``log_y=True`` — a single large-magnitude
+    event (e.g. the ~650 spike in Val) otherwise flattens every smaller
+    event to near-zero on linear scale; log spreads them out so you can
+    see which true-anomaly bands actually produce a visible score bump
+    and which don't. ``log_x`` is available for symmetry (e.g. when the
+    early part of the timeline is much denser in events than the late part).
+
+    The score curve is down-sampled via **block-max aggregation** (each plotted
+    point is the max over ``ds`` consecutive rows) so short score peaks remain
+    visible regardless of ``ds``.  The bottom ribbon is drawn as spans from the
+    full-resolution segment lists of ``y_true`` and ``y_pred`` — so even a
+    single-row prediction is still visible at any ``ds``.
+    This has **no impact on any metric** — metrics should be computed
+    separately on the full-resolution ``scores`` / ``y_true``.
+
+    Parameters
+    ----------
+    scores    : (n_rows,) float — row-level anomaly scores
+    y_true    : (n_rows,) 0/1   — ground-truth labels
+    threshold : float           — decision threshold
+    title     : figure title
+    ds        : int             — downsample stride for plotting (no metric impact)
+    log_y     : bool            — log scale on the MSE (y) axis
+    log_x     : bool            — log scale on the row-index (x) axis
+    index     : (n_rows,) optional — x-axis values, same length as ``scores``.
+                Defaults to ``np.arange(n_rows)`` (0-based positions). Pass
+                e.g. ``df_test.index.values`` to show the *absolute* row
+                indices from the original dataset on the x-axis instead of
+                the 0-based positions within the split.
+    figsize   : (width, height) — forwarded to plt.subplots
+
+    Returns
+    -------
+    fig : matplotlib Figure
+    """
+    scores = np.asarray(scores, dtype=np.float64)
+    y_true = np.asarray(y_true, dtype=np.int8)
+    n      = len(scores)
+
+    # Resolve x-axis values: caller-supplied or 0..n-1.
+    if index is None:
+        x_full = np.arange(n)
+    else:
+        x_full = np.asarray(index)
+        if len(x_full) != n:
+            raise ValueError(
+                f"index length {len(x_full)} must match scores length {n}"
+            )
+
+    segments      = find_anomaly_segments(y_true)
+    y_pred        = (scores > threshold).astype(np.int8)
+    pred_segments = find_anomaly_segments(y_pred)
+
+    # Downsample for plot speed using *block-max* aggregation so short score
+    # peaks and sparse predictions survive — stride sampling would miss them.
+    # Each output point = max of its `ds`-row block. x position = block start.
+    n_full   = (n // ds) * ds
+    if n_full > 0:
+        scores_blk = scores[:n_full].reshape(-1, ds).max(axis=1)
+        x_blk      = x_full[:n_full:ds]
+    else:
+        scores_blk = scores
+        x_blk      = x_full
+    # Append the tail (last partial block) so the right edge isn't cut off.
+    if n_full < n:
+        scores_blk = np.concatenate([scores_blk, [scores[n_full:].max()]])
+        x_blk      = np.concatenate([x_blk,      [x_full[n_full]]])
+
+    scores_ds = scores_blk
+    x_ds      = x_blk
+
+    fig, axes = plt.subplots(
+        2, 1, figsize=figsize, sharex=True,
+        gridspec_kw={"height_ratios": [1.6, 1]},
+    )
+    ax, ax2 = axes
+
+    # ── Axis scaling ────────────────────────────────────────────────────────
+    # Log scales need strictly-positive values; floor non-positives to a small
+    # epsilon below the smallest positive so nothing is clipped off the axis.
+    if log_y:
+        pos = scores_ds[scores_ds > 0]
+        eps_y = float(pos.min()) * 0.5 if pos.size else 1e-9
+        scores_plot = np.where(scores_ds > 0, scores_ds, eps_y)
+        ax.set_yscale("log")
+    else:
+        scores_plot = scores_ds
+
+    if log_x:
+        pos_x = x_ds[x_ds > 0]
+        eps_x = float(pos_x.min()) * 0.5 if pos_x.size else 1.0
+        x_plot = np.where(x_ds > 0, x_ds, eps_x)
+        # sharex=True propagates limits; set scale on both axes to be safe.
+        ax.set_xscale("log")
+        ax2.set_xscale("log")
+    else:
+        x_plot = x_ds
+
+    # Minimum visible span for event rectangles: at full-dataset zoom, a short
+    # event (1–5 rows) is sub-pixel wide on a ~2 M-row axis and won't render.
+    # Enforce a minimum visual width of ~0.3% of the plotted range.
+    x_range  = float(x_full[-1] - x_full[0]) if n > 1 else 1.0
+    min_span = max(1.0, x_range * 0.003)
+
+    def _expand(seg):
+        """Convert segment dict → (x_s, x_e) in plot coords, min-span-padded."""
+        s_pos = min(seg["start"], n - 1)
+        e_pos = min(seg["end"],   n - 1)
+        x_s   = float(x_full[s_pos])
+        x_e   = float(x_full[e_pos])
+        if x_e - x_s < min_span:
+            mid = 0.5 * (x_s + x_e)
+            x_s = mid - 0.5 * min_span
+            x_e = mid + 0.5 * min_span
+        if log_x:
+            if x_s <= 0: x_s = eps_x
+            if x_e <= 0: x_e = eps_x
+        return x_s, x_e
+
+    def _merge(pairs):
+        """Union overlapping/touching (x_s, x_e) intervals → list of disjoint pairs.
+        Avoids alpha-stacking when adjacent events are expanded to min_span."""
+        if not pairs:
+            return []
+        pairs = sorted(pairs)
+        merged = [list(pairs[0])]
+        for a, b in pairs[1:]:
+            if a <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        return merged
+
+    def _spans(axis, segs, y_lo, y_hi, color, alpha):
+        for x_s, x_e in _merge([_expand(s) for s in segs]):
+            axis.fill_between([x_s, x_e], y_lo, y_hi,
+                              color=color, alpha=alpha, linewidth=0)
+
+    # ── Top panel: True-anomaly bands behind the score curve ───────────────
+    # Bands cover the full y-range via axvspan; merged after expansion so
+    # close-together events don't alpha-stack into darker regions.
+    for x_s, x_e in _merge([_expand(s) for s in segments]):
+        ax.axvspan(x_s, x_e, color=ANOMALY_COLOR, alpha=0.45, lw=0)
+
+    ax.plot(x_plot, scores_plot, lw=0.6, color="#5b9bd5", alpha=0.95)
+    ax.axhline(threshold, color=ANOMALY_COLOR, lw=1.5, ls="--")
+
+    ax.set_ylabel("MSE score" + (" (log)" if log_y else ""))
+    ax.set_title(title, fontweight="bold", fontsize=12)
+
+    handles = [
+        plt.Line2D([0], [0], color="#5b9bd5", lw=1, label="Recon MSE"),
+        plt.Line2D([0], [0], color=ANOMALY_COLOR, lw=1.5, ls="--",
+                   label=f"Threshold {threshold:.4f}"),
+        mpatches.Patch(color=ANOMALY_COLOR, alpha=0.45,
+                       label=f"True anomaly ({len(segments)} events)"),
+    ]
+    ax.legend(handles=handles, fontsize=8, loc="upper right")
+
+    # ── Bottom panel: predicted events, split into TP vs FP by overlap ─────
+    # A predicted event is TP iff it overlaps any true segment (event-wise).
+    tp_segs, fp_segs = [], []
+    for pseg in pred_segments:
+        ps, pe = pseg["start"], pseg["end"]
+        hit = any(not (pe < tseg["start"] or ps > tseg["end"]) for tseg in segments)
+        (tp_segs if hit else fp_segs).append(pseg)
+
+    TP_COLOR = "#8fbc8f"  # sage / darkseagreen — soft, muted
+    FP_COLOR = "#b19cd9"  # soft lavender — muted, matches the sage/salmon palette
+    _spans(ax2, tp_segs, 0.0, 1.0, TP_COLOR, 0.85)
+    _spans(ax2, fp_segs, 0.0, 1.0, FP_COLOR, 0.85)
+
+    ax2.set_ylim(0, 1)
+    ax2.set_yticks([0.5])
+    ax2.set_yticklabels(["Pred"])
+    ax2.set_ylabel("Anomaly")
+    ax2.set_xlabel("Row index" + (" (log)" if log_x else ""))
+    legend_handles = [
+        mpatches.Patch(color=TP_COLOR, alpha=0.85,
+                       label=f"TP ({len(tp_segs)})"),
+        mpatches.Patch(color=FP_COLOR, alpha=0.85,
+                       label=f"FP ({len(fp_segs)})"),
+    ]
+    ax2.legend(handles=legend_handles, fontsize=8, loc="upper right")
 
     fig.tight_layout()
     return fig

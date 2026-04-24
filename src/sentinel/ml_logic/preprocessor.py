@@ -32,6 +32,8 @@ import numpy as np
 from sklearn.preprocessing import RobustScaler
 
 from ..params import (
+    API_SLICE_END,
+    API_SLICE_START,
     BOOTCAMP_TRAIN_RATIO,
     BOOTCAMP_VAL_RATIO,
     RANDOM_STATE,
@@ -209,6 +211,14 @@ def run_preprocessing(
 
     test_intern_raw = test_intern_slice[target_channels].values.astype(np.float32)
 
+    # ── API demo slice: small low-drift window carved out of test_intern ──────
+    api_start = min(API_SLICE_START, len(test_intern_raw))
+    api_end   = min(API_SLICE_END,   len(test_intern_raw))
+    test_api  = test_intern_raw[api_start:api_end]
+    y_test_api = y_test_intern[api_start:api_end]
+    print(f"\nAPI slice: rows [{api_start:,} : {api_end:,}]  "
+          f"({len(test_api):,} rows, {int(y_test_api.sum()):,} anom)")
+
     del train, train_slice, val_slice, test_intern_slice, nom_train_slice
     gc.collect()
 
@@ -229,6 +239,8 @@ def run_preprocessing(
         "test_intern_scaled.npy" : test_intern_scaled,
         "test_intern_raw.npy"    : test_intern_raw,
         "y_test_intern.npy"      : y_test_intern,
+        "test_api.npy"           : test_api,
+        "y_test_api.npy"         : y_test_api,
     }
     total = 0
     for fname, arr in save_manifest.items():
@@ -254,6 +266,10 @@ def run_preprocessing(
         "n_train_anom"         : int(y_train.sum()),
         "n_val_anom"           : int(y_val.sum()),
         "n_test_intern_anom"   : int(y_test_intern.sum()),
+        "api_slice_start"      : int(api_start),
+        "api_slice_end"        : int(api_end),
+        "n_test_api_rows"      : int(len(y_test_api)),
+        "n_test_api_anom"      : int(y_test_api.sum()),
         "shapes"               : {k.replace(".npy", ""): list(v.shape)
                                   for k, v in save_manifest.items()},
     }
@@ -272,6 +288,8 @@ def run_preprocessing(
         ("y_val",              y_val,              1, np.int8),
         ("test_intern_scaled", test_intern_scaled, 2, np.float32),
         ("y_test_intern",      y_test_intern,      1, np.int8),
+        ("test_api",           test_api,           2, np.float32),
+        ("y_test_api",         y_test_api,         1, np.int8),
     ]
     all_ok = True
     for name, arr, ndim, dtype in checks:
@@ -309,12 +327,11 @@ def run_preprocessing_kaggle() -> None:
     set scaled with the same scaler. RobustScaler is fit on nominal training
     rows only (no leakage).
 
-    Reads data/raw/, writes data/processed/kaggle/ and models/robust_scaler.pkl.
+    Reads data/raw/ and writes data/processed/kaggle/.
     Idempotent — safe to re-run.
     """
     OUT_DIR = PROCESSED_DIR / "kaggle"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    MODELS_DIR.mkdir(exist_ok=True)
     np.random.seed(RANDOM_STATE)
 
     # ── 1. Load raw data ──────────────────────────────────────────────────────
@@ -358,11 +375,6 @@ def run_preprocessing_kaggle() -> None:
     print("\nFitting RobustScaler on nominal training rows …")
     scaler = RobustScaler()
     scaler.fit(nom_train_df[target_channels].values.astype(np.float32))
-
-    scaler_path = MODELS_DIR / "robust_scaler.pkl"
-    with open(scaler_path, "wb") as f:
-        pickle.dump(scaler, f)
-    print(f"  scaler saved → {scaler_path}")
 
     # ── 4. Scale all splits ───────────────────────────────────────────────────
     # All splits are transformed with the same scaler fitted in step 3.

@@ -18,4 +18,15 @@ from .preprocessor import (
     run_preprocessing,
     run_preprocessing_kaggle,
 )
-from .viz import plot_channels, plot_segment_zoom, plot_distributions, plot_correlation
+from .viz import (
+    plot_channels,
+    plot_segment_zoom,
+    plot_distributions,
+    plot_correlation,
+    plot_score_distribution,
+    plot_score_timeline,
+    plot_score_panels,
+    plot_timeline,
+    plot_event_zoom_with_score,
+    plot_confusion_and_channel_errors,
+)
