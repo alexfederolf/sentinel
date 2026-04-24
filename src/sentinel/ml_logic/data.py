@@ -20,7 +20,6 @@ PROCESSED_DIR   = DATA_DIR / "processed"
 MODELS_DIR      = Path(__file__).resolve().parents[3] / "models"
 SUBMISSIONS_DIR = Path(__file__).resolve().parents[3] / "submissions"
 
-
 def load_train(path: Path = RAW_DIR / "train.parquet") -> pd.DataFrame:
     """
     Load the training set (14.7 M rows × 89 columns).
