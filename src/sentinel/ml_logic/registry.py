@@ -14,7 +14,8 @@ load_scaler()             — load the fitted RobustScaler
 import pickle
 from pathlib import Path
 
-from .data import MODELS_DIR
+# from .data import MODELS_DIR
+from ..params import MODELS_DIR
 
 
 def save_model(model, name: str = "model") -> Path:
@@ -38,7 +39,7 @@ def save_model(model, name: str = "model") -> Path:
     return path
 
 
-def load_model(name: str = "pca_bootcamp") -> object:
+def load_model(name: str = "pca") -> object:
     """
     Load a pickled model from models/<name>.pkl
 

@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from sentinel.ml_logic.registry import load_model, load_scaler
-from sentinel.ml_logic.scoring import score_windows
+from sentinel.ml_logic.scorer import score_windows
 from sentinel.params import WINDOW_SIZE
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ app = FastAPI(
 # Both are kept in memory for the lifetime of the API process
 @app.on_event("startup")
 def load_resources():
-    app.state.model  = load_model("pca_bootcamp")
+    app.state.model  = load_model("pca")
     app.state.scaler = load_scaler()
     print("✅ Model and scaler ready")
 
