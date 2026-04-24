@@ -10,7 +10,7 @@ from pathlib import Path
 DATA_DIR        = Path(__file__).resolve().parents[3] / "data"
 RAW_DIR         = DATA_DIR / "raw"
 PROCESSED_DIR   = DATA_DIR / "processed"
-MODELS_DIR      = Path(__file__).resolve().parents[3] / "models"
+MODELS_DIR      = Path(__file__).resolve().parents[2] / "models"
 #SUBMISSIONS_DIR = Path(__file__).resolve().parents[3] / "submissions"
 
 
