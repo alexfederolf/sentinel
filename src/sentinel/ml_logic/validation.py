@@ -1,5 +1,5 @@
 """
-Validation infrastructure for the bootcamp pipeline.
+Validation infrastructure
 
 Three concerns live here:
 

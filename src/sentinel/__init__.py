@@ -13,10 +13,20 @@ from .ml_logic.data import (
     get_telecommand_cols,
 )
 from .ml_logic.metrics import f05_score, corrected_event_f05
-from .ml_logic.preprocessor import create_windows, run_preprocessing
+from .ml_logic.preprocessor import (
+    create_windows,
+    run_preprocessing,
+    run_preprocessing_kaggle,
+)
 from .ml_logic.viz import (
     plot_channels,
     plot_segment_zoom,
     plot_distributions,
     plot_correlation,
+    plot_score_distribution,
+    plot_score_timeline,
+    plot_score_panels,
+    plot_timeline,
+    plot_event_zoom_with_score,
+    plot_confusion_and_channel_errors,
 )

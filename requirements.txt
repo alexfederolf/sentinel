@@ -1,6 +1,7 @@
 # ESA-ADB Anomaly Detection — pinned dependencies
 # ML stack
 scikit-learn==1.7.2
+tensorflow~=2.16
 
 # Data & numerics
 numpy~=1.26
@@ -15,3 +16,7 @@ seaborn~=0.13
 # Notebook & dev tools
 jupyter~=1.1
 pytest~=8.3
+
+# API
+fastapi~=0.115
+uvicorn~=0.34

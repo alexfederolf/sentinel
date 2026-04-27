@@ -1,7 +1,6 @@
 """
-Corrected event-wise F0.5-score
 
-Source: ESA Anomaly Detection Benchmark
+ESA Corrected event-wise F0.5-score from the ESA Anomaly Detection Benchmark (ESA-ADB)
 https://github.com/kplabs-pl/ESA-ADB/timeeval/metrics/ESA_ADB_metrics.py
 
 Formula
@@ -33,129 +32,12 @@ import numpy as np
 from .data import find_anomaly_segments
 
 
-def _find_predicted_segments(y_pred: np.ndarray) -> list[dict]:
-    """Return contiguous predicted-anomaly segments — vectorised via np.diff."""
-    padded = np.concatenate(([0], y_pred.astype(np.int8), [0]))
-    d      = np.diff(padded)
-    starts = np.where(d ==  1)[0]
-    ends   = np.where(d == -1)[0] - 1
-    return [{"start": int(s), "end": int(e)} for s, e in zip(starts, ends)]
-
-
-def corrected_event_f05(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    beta: float = 0.5,
-) -> dict:
-    """
-    Compute the corrected event-wise F-beta score.
-
-    Parameters
-    ----------
-    y_true : array-like of 0/1
-    y_pred : array-like of 0/1
-    beta   : default 0.5 (precision-weighted)
-
-    Returns
-    -------
-    dict: f_score, precision, recall, tp_events, fn_events,
-          fp_pred_events, fp_samples, tnr
-    """
-    y_true = np.asarray(y_true, dtype=np.int8)
-    y_pred = np.asarray(y_pred, dtype=np.int8)
-
-    true_segs = find_anomaly_segments(y_true)   # ground-truth events
-    pred_segs = _find_predicted_segments(y_pred)
-
-    n_nominal  = int((y_true == 0).sum())
-    n_events   = len(true_segs)
-
-    if n_events == 0:
-        return {"f_score": 0.0, "precision": 0.0, "recall": 0.0,
-                "tp_events": 0, "fn_events": 0,
-                "fp_pred_events": len(pred_segs), "fp_samples": 0, "tnr": 1.0}
-
-    # ── Step 1: event-wise TP / FN (over ground-truth segments) ──────────────
-    tp_events = 0
-    fn_events = 0
-    matched_pred = [False] * len(pred_segs)   # track which pred segs overlap GT
-
-    for ts in true_segs:
-        detected = False
-        for p, ps in enumerate(pred_segs):
-            # overlap: not (ps.end < ts.start or ps.start > ts.end)
-            if ps["end"] >= ts["start"] and ps["start"] <= ts["end"]:
-                matched_pred[p] = True
-                detected = True
-        if detected:
-            tp_events += 1
-        else:
-            fn_events += 1
-
-    # ── Step 2: FP predicted events (pred segments with NO GT overlap) ────────
-    fp_pred_events = sum(1 for m in matched_pred if not m)
-
-    # ── Step 3: TNR correction ────────────────────────────────────────────────
-    fp_samples = int(((y_pred == 1) & (y_true == 0)).sum())
-    tnr = (1.0 - fp_samples / n_nominal) if n_nominal > 0 else 1.0
-
-    # ── Step 4: corrected precision ───────────────────────────────────────────
-    denom_pr = tp_events + fp_pred_events
-    pr_ew    = (tp_events / denom_pr) if denom_pr > 0 else 0.0
-    precision = pr_ew * tnr                        # Pr_c = Pr_ew × TNR
-
-    # ── Step 5: recall & F-beta ───────────────────────────────────────────────
-    recall  = tp_events / n_events
-
-    if precision + recall == 0:
-        f_score = 0.0
-        f1 = 0.0
-    else:
-        f_score = (1 + beta**2) * precision * recall / (beta**2 * precision + recall)
-        f1 = 2 * precision * recall / (precision + recall)
-
-    return {
-        "f_score"       : round(f_score,    6),
-        "f1"            : round(f1,    6),
-        "precision"     : round(precision,  6),
-        "recall"        : round(recall,     6),
-        "tp_events"     : tp_events,
-        "fn_events"     : fn_events,
-        "fp_pred_events": fp_pred_events,
-        "fp_samples"    : fp_samples,
-        "tnr"           : round(tnr, 6),
-    }
-
-
-def f05_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Convenience wrapper — returns just the F0.5 scalar."""
-    return corrected_event_f05(y_true, y_pred, beta=0.5)["f_score"]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Bootcamp metrics (additive — do not touch corrected_event_f05 above)
-# ══════════════════════════════════════════════════════════════════════════════
-#
-# The ESA corrected metric (above) is kept for Kaggle-leaderboard comparison
-# and exposed here as `esa_metric`. Everything else in this block is a
-# *standard* event / point / row metric — no TNR correction, no secret sauce,
-# easy to defend in a bootcamp presentation.
-#
-# All event-level metrics share the same TP/FN/FP-event tally, computed once
-# by `_event_counts`. Individual metric functions return dicts so they can be
-# destructured by callers; `compute_all_metrics` returns a flat dict for
-# reporting and frontend display.
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-# Alias — `esa_metric` is the name used in notebooks 11–13 for clarity.
-esa_metric = corrected_event_f05
-
+# ── internal helpers ─────────────────────────────────────────────────────────
 
 def _event_counts(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[int, int, int, int]:
-    """Event-level TP / FN / FP / total — shared by every event-wise metric."""
+    """Event-level TP / FN / FP / total - shared by every event-wise metric."""
     true_segs = find_anomaly_segments(y_true)
-    pred_segs = _find_predicted_segments(y_pred)
+    pred_segs = find_anomaly_segments(y_pred)
     n_events  = len(true_segs)
 
     tp = 0
@@ -173,13 +55,117 @@ def _event_counts(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[int, int, int
     return tp, fn, fp_pred, n_events
 
 
+def _fbeta_from_counts(tp: int, fn: int, fp_pred: int, n_events: int,
+                       beta: float) -> dict:
+    """Build the standard event-wise F-beta dict from precomputed counts."""
+    if n_events == 0:
+        return {"f_score": 0.0, "precision": 0.0, "recall": 0.0,
+                "tp_events": 0, "fn_events": 0, "fp_pred_events": fp_pred}
+
+    denom_p   = tp + fp_pred
+    precision = (tp / denom_p) if denom_p > 0 else 0.0
+    recall    = tp / n_events
+    f = ((1 + beta**2) * precision * recall / (beta**2 * precision + recall)
+         if (precision + recall) > 0 else 0.0)
+    return {
+        "f_score"       : f,
+        "precision"     : precision,
+        "recall"        : recall,
+        "tp_events"     : tp,
+        "fn_events"     : fn,
+        "fp_pred_events": fp_pred,
+    }
+
+
+def _tnr(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[int, float]:
+    """fp_samples and TNR for the ESA correction."""
+    n_nominal  = int((y_true == 0).sum())
+    fp_samples = int(((y_pred == 1) & (y_true == 0)).sum())
+    tnr = (1.0 - fp_samples / n_nominal) if n_nominal > 0 else 1.0
+    return fp_samples, tnr
+
+
+def _corrected_from_counts(tp: int, fn: int, fp_pred: int, n_events: int,
+                           fp_samples: int, tnr: float, beta: float) -> dict:
+    """Build the ESA corrected F-beta dict from precomputed counts + TNR."""
+    if n_events == 0:
+        return {"f_score": 0.0, "precision": 0.0, "recall": 0.0,
+                "tp_events": 0, "fn_events": 0,
+                "fp_pred_events": fp_pred, "fp_samples": fp_samples, "tnr": tnr}
+
+    denom_pr  = tp + fp_pred
+    pr_ew     = (tp / denom_pr) if denom_pr > 0 else 0.0
+    precision = pr_ew * tnr                        # Pr_c = Pr_ew × TNR
+    recall    = tp / n_events
+    f_score = ((1 + beta**2) * precision * recall / (beta**2 * precision + recall)
+               if (precision + recall) > 0 else 0.0)
+    return {
+        "f_score"       : f_score,
+        "precision"     : precision,
+        "recall"        : recall,
+        "tp_events"     : tp,
+        "fn_events"     : fn,
+        "fp_pred_events": fp_pred,
+        "fp_samples"    : fp_samples,
+        "tnr"           : tnr,
+    }
+
+
+# ── public: ESA corrected metric ─────────────────────────────────────────────
+
+def corrected_event_f05(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    beta: float = 0.5,
+) -> dict:
+    """
+    Compute the corrected event-wise F-beta score (ESA Kaggle metric).
+
+    Returns
+    -------
+    dict: f_score, precision, recall, tp_events, fn_events,
+          fp_pred_events, fp_samples, tnr
+    """
+    y_true = np.asarray(y_true, dtype=np.int8)
+    y_pred = np.asarray(y_pred, dtype=np.int8)
+    tp, fn, fp_pred, n_events = _event_counts(y_true, y_pred)
+    fp_samples, tnr = _tnr(y_true, y_pred)
+    return _corrected_from_counts(tp, fn, fp_pred, n_events,
+                                  fp_samples, tnr, beta)
+
+
+def f05_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Convenience wrapper - returns just the F0.5 scalar."""
+    return corrected_event_f05(y_true, y_pred, beta=0.5)["f_score"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Bootcamp metrics (additive - do not touch corrected_event_f05 above)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# The ESA corrected metric (above) is kept for Kaggle-leaderboard comparison
+# and exposed here as `esa_metric`. Everything else in this block is a
+# *standard* event / point / row metric - no TNR correction, no secret sauce,
+# easy to defend in a bootcamp presentation.
+#
+# All event-level metrics share the same TP/FN/FP-event tally, computed once
+# by `_event_counts`. Individual metric functions return dicts so they can be
+# destructured by callers; `compute_all_metrics` returns a flat dict for
+# reporting and frontend display.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# Alias - `esa_metric` is the name used in notebooks 11–13 for clarity.
+esa_metric = corrected_event_f05
+
+
 def event_fbeta(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     beta: float = 0.5,
 ) -> dict:
     """
-    Standard event-wise F-beta. **No TNR correction** — this is the metric
+    Standard event-wise F-beta. **No TNR correction** - this is the metric
     the bootcamp notebooks tune against.
 
     Pr_ew = TP_events / (TP_events + FP_pred_events)
@@ -188,29 +174,7 @@ def event_fbeta(
     """
     y_true = np.asarray(y_true, dtype=np.int8)
     y_pred = np.asarray(y_pred, dtype=np.int8)
-    tp, fn, fp_pred, n_events = _event_counts(y_true, y_pred)
-
-    if n_events == 0:
-        return {"f_score": 0.0, "precision": 0.0, "recall": 0.0,
-                "tp_events": 0, "fn_events": 0, "fp_pred_events": fp_pred}
-
-    denom_p = tp + fp_pred
-    precision = (tp / denom_p) if denom_p > 0 else 0.0
-    recall    = tp / n_events
-
-    if precision + recall == 0:
-        f = 0.0
-    else:
-        f = (1 + beta**2) * precision * recall / (beta**2 * precision + recall)
-
-    return {
-        "f_score"       : round(f, 6),
-        "precision"     : round(precision, 6),
-        "recall"        : round(recall, 6),
-        "tp_events"     : tp,
-        "fn_events"     : fn,
-        "fp_pred_events": fp_pred,
-    }
+    return _fbeta_from_counts(*_event_counts(y_true, y_pred), beta=beta)
 
 
 def event_f05(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
@@ -230,7 +194,7 @@ def event_f2(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
 def event_detection_rate(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     """
-    TP_events / N_true_events — the jury-friendly "caught X of Y events" number.
+    TP_events / N_true_events - the jury-friendly "caught X of Y events" number.
     Same as event-wise recall, but returned with the raw counts so the frontend
     can print `32 / 38 (84%)` without recomputing.
     """
@@ -239,7 +203,7 @@ def event_detection_rate(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
         np.asarray(y_pred, dtype=np.int8),
     )
     rate = (tp / n_events) if n_events > 0 else 0.0
-    return {"rate": round(rate, 6), "tp_events": tp, "n_events": n_events}
+    return {"rate": rate, "tp_events": tp, "n_events": n_events}
 
 
 def point_adjust_f1(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
@@ -248,7 +212,7 @@ def point_adjust_f1(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     predicted row is positive, mark the entire event as predicted. Then
     compute point-level precision / recall / F1 on the adjusted prediction.
 
-    This is forgiving — it rewards partial event detection — and is one of
+    This is forgiving - it rewards partial event detection - and is one of
     the default reference metrics in the time-series anomaly-detection
     literature. We report it alongside the stricter event-wise metrics.
     """
@@ -271,9 +235,9 @@ def point_adjust_f1(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
                  if (precision + recall) > 0 else 0.0)
 
     return {
-        "f1"       : round(f1, 6),
-        "precision": round(precision, 6),
-        "recall"   : round(recall, 6),
+        "f1"       : f1,
+        "precision": precision,
+        "recall"   : recall,
         "tp": tp, "fp": fp, "fn": fn,
     }
 
@@ -296,9 +260,9 @@ def row_precision_recall(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
                  if (precision + recall) > 0 else 0.0)
 
     return {
-        "precision": round(precision, 6),
-        "recall"   : round(recall, 6),
-        "f1"       : round(f1, 6),
+        "precision": precision,
+        "recall"   : recall,
+        "f1"       : f1,
         "tp": tp, "fp": fp, "fn": fn,
     }
 
@@ -308,6 +272,9 @@ def compute_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     Flat dict of every reported metric. Notebooks 11–13 call this once per
     submission and display the result as a summary table.
 
+    Event-level counts (`_event_counts`) are computed once and reused across
+    all five event-wise F-beta / ESA / detection-rate entries.
+
     Keys (flat, so the dict can feed straight into pandas):
       - event_f05 / event_f1 / event_f2
       - event_precision / event_recall
@@ -316,16 +283,24 @@ def compute_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
       - pa_f1 / pa_precision / pa_recall
       - row_precision / row_recall / row_f1
     """
-    ef05 = event_f05(y_true, y_pred)
-    ef1  = event_f1(y_true, y_pred)
-    ef2  = event_f2(y_true, y_pred)
-    esa  = esa_metric(y_true, y_pred)
-    edr  = event_detection_rate(y_true, y_pred)
+    y_true = np.asarray(y_true, dtype=np.int8)
+    y_pred = np.asarray(y_pred, dtype=np.int8)
+
+    tp, fn, fp_pred, n_events = _event_counts(y_true, y_pred)
+    fp_samples, tnr           = _tnr(y_true, y_pred)
+
+    ef05 = _fbeta_from_counts(tp, fn, fp_pred, n_events, beta=0.5)
+    ef1  = _fbeta_from_counts(tp, fn, fp_pred, n_events, beta=1.0)
+    ef2  = _fbeta_from_counts(tp, fn, fp_pred, n_events, beta=2.0)
+    esa  = _corrected_from_counts(tp, fn, fp_pred, n_events,
+                                  fp_samples, tnr, beta=0.5)
     pa   = point_adjust_f1(y_true, y_pred)
     rpr  = row_precision_recall(y_true, y_pred)
 
+    rate = (tp / n_events) if n_events > 0 else 0.0
+
     return {
-        # event-wise (uncorrected) — primary tuning metric
+        # event-wise (uncorrected) - primary tuning metric
         "event_f05"          : ef05["f_score"],
         "event_f1"           : ef1["f_score"],
         "event_f2"           : ef2["f_score"],
@@ -337,10 +312,10 @@ def compute_all_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
         "esa_recall"         : esa["recall"],
         "esa_tnr"            : esa["tnr"],
         # jury-friendly event counts
-        "event_detection_rate": edr["rate"],
-        "tp_events"          : edr["tp_events"],
-        "n_events"           : edr["n_events"],
-        "fp_pred_events"     : ef05["fp_pred_events"],
+        "event_detection_rate": rate,
+        "tp_events"          : tp,
+        "n_events"           : n_events,
+        "fp_pred_events"     : fp_pred,
         # point-adjust F1 (ref metric from TS-AD literature)
         "pa_f1"              : pa["f1"],
         "pa_precision"       : pa["precision"],

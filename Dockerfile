@@ -23,11 +23,22 @@ COPY src ./src
 COPY setup.py pyproject.toml ./
 RUN pip install --no-cache-dir -e .
 
+COPY api ./api
+
 # ── Runtime data directories ─────────────────────────────────────────────────
 # These are mounted or populated at runtime (not baked into the image).
+
+
+COPY models ./models
+COPY data/raw/target_channels.csv ./data/raw/target_channels.csv
+COPY data/processed/test_api.npy ./data/processed/test_api.npy
+COPY data/processed/y_test_api.npy ./data/processed/y_test_api.npy
 RUN mkdir -p /app/data/raw /app/data/processed /app/models /app/submissions
+
 
 # ── Default command ──────────────────────────────────────────────────────────
 # Run the preprocessing pipeline. Override with e.g.:
 #   docker run sentinel python -m sentinel.main train
-CMD ["python", "-m", "sentinel.main", "preprocess"]
+
+
+CMD ["sh", "-c", "uvicorn api.fast:app --host 0.0.0.0 --port ${PORT:-8000}"]
