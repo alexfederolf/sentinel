@@ -1,15 +1,15 @@
 """
 Two public entry points:
-    * predict         — Kaggle-style (id, is_anomaly) DataFrame
+    * predict         — (id, is_anomaly) DataFrame
     * predict_report  — full dict for the NB 15 showcase plots
 
 Every argument is optional. Anything left as ``None`` is loaded from the defaults:
-    model    : models/lstm_ae.keras
+    model    : models/pca.pkl
     scaler   : models/scaler.pkl
     features : data/raw/target_channels.csv
-    X_raw    : data/processed/test_intern_raw.npy
+    X_raw    : data/processed/test_api.npy
 
-``WINDOW_SIZE`` and ``LSTM_THRESHOLD`` default to the values in
+``WINDOW_SIZE`` and ``PCA_THRESHOLD`` default to the values in
 ``sentinel.params``.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ import pickle
 import numpy as np
 import pandas as pd
 
-from ..params import LSTM_THRESHOLD, WINDOW_SIZE
+from ..params import PCA_THRESHOLD, WINDOW_SIZE
 from .data import MODELS_DIR, PROCESSED_DIR, load_target_channels
 from .scorer import score_report, score_windows
 
@@ -28,16 +28,15 @@ from .scorer import score_report, score_windows
 def _load(model=None, scaler=None, features=None, X_raw=None):
     """Fill in any missing artefact from the bootcamp defaults."""
     if model is None:
-        # lazy import so PCA-only callers don't pay the tensorflow cost
-        from tensorflow.keras.models import load_model
-        model = load_model(MODELS_DIR / "lstm_ae.keras", compile=False)
+        with open(MODELS_DIR / "pca.pkl", "rb") as f:
+            model = pickle.load(f)
     if scaler is None:
         with open(MODELS_DIR / "scaler.pkl", "rb") as f:
             scaler = pickle.load(f)
     if features is None:
         features = load_target_channels()
     if X_raw is None:
-        X_raw = np.load(PROCESSED_DIR / "test_intern_raw.npy")
+        X_raw = np.load(PROCESSED_DIR / "test_api.npy")
     return model, scaler, list(features), X_raw
 
 
@@ -57,14 +56,14 @@ def predict(
     scaler=None,
     features=None,
     X_raw=None,
-    threshold: float = LSTM_THRESHOLD,
+    threshold: float = PCA_THRESHOLD,
     win: int = WINDOW_SIZE,
 ) -> pd.DataFrame:
     """
     Output: DataFrame with columns ``id`` and ``is_anomaly``.
 
-    Pass nothing to run the default LSTM-AE pipeline on test_intern; pass any
-    subset of artefacts to override individual defaults.
+    Pass nothing to run the default PCA pipeline on the test_api slice; pass
+    any subset of artefacts to override individual defaults.
     """
     model, scaler, features, X_raw = _load(model, scaler, features, X_raw)
     X_scaled = _scale(scaler, features, X_raw)
@@ -86,7 +85,7 @@ def predict_report(
     scaler=None,
     features=None,
     X_raw=None,
-    threshold: float = LSTM_THRESHOLD,
+    threshold: float = PCA_THRESHOLD,
     win: int = WINDOW_SIZE,
     topk: int | None = None,
 ) -> dict:

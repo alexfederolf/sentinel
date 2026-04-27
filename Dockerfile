@@ -31,6 +31,8 @@ COPY api ./api
 
 COPY models ./models
 COPY data/raw/target_channels.csv ./data/raw/target_channels.csv
+COPY data/processed/test_api.npy ./data/processed/test_api.npy
+COPY data/processed/y_test_api.npy ./data/processed/y_test_api.npy
 RUN mkdir -p /app/data/raw /app/data/processed /app/models /app/submissions
 
 

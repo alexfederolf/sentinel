@@ -3,61 +3,70 @@ SENTINEL Anomaly Detection API
 
 Endpoints
 ---------
-GET  /          → health check, confirms API is alive
-POST /predict   → full prediction pipeline delegated to predictor.py:
-                  raw sensor data → preprocess → model → predictions
+GET  /          → health check
+GET  /timeline  → cached labels + ground truth for the test_api slice
+POST /predict   → score user-supplied rows using the cached model + scaler
+
+The model, scaler, target channels, and the internal test_api slice are loaded
+once at startup. /timeline returns a precomputed prediction so the frontend
+renders instantly; /predict reuses the same cached model for ad-hoc inputs.
 
 Usage
 -----
     make run_api
     curl http://localhost:8000/
+    curl http://localhost:8000/timeline
 """
+
+from contextlib import asynccontextmanager
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from sentinel.ml_logic.data import load_target_channels
 from sentinel.ml_logic.predictor import predict
-from sentinel.ml_logic.registry import load_scaler
-from sentinel.ml_logic.registry import load_model
+from sentinel.ml_logic.registry import load_model, load_scaler
+from sentinel.params import PCA_THRESHOLD, PROCESSED_DIR
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
+# ── Lifespan: load everything once at startup ────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("⏳ Loading model + scaler …")
+    app.state.model     = load_model("pca")
+    app.state.scaler    = load_scaler()
+    app.state.features  = load_target_channels()
+    app.state.threshold = PCA_THRESHOLD
+
+    print("⏳ Running cached prediction over test_api slice …")
+    X_api = np.load(PROCESSED_DIR / "test_api.npy")
+    y_api = np.load(PROCESSED_DIR / "y_test_api.npy")
+    sub = predict(
+        model    = app.state.model,
+        scaler   = app.state.scaler,
+        features = app.state.features,
+        X_raw    = X_api,
+        threshold= app.state.threshold,
+    )
+    app.state.timeline = sub.astype({"id": int, "is_anomaly": int}).to_dict(orient="records")
+    print(f"✅ Ready: {len(app.state.timeline):,} rows cached")
+    yield
+    # Nothing to tear down.
+
+
 app = FastAPI(
     title="SENTINEL Anomaly Detection",
     description="ESA satellite telemetry anomaly detector",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
-@app.on_event("startup")
-def load_resources():
-    app.state.model  = load_model("pca")
-    app.state.scaler = load_scaler()
-    print("✅ Model and scaler ready")
 
-# ── Request / Response schemas ────────────────────────────────────────────────
+# ── Schemas ───────────────────────────────────────────────────────────────────
 class PredictRequest(BaseModel):
-    """
-    Raw sensor readings from the user.
-    rows: list of rows, each row is a list of 58 channel values
-
-    Example:
-    {
-        "rows": [[0.1, 0.2, ...], [0.3, 0.4, ...]]
-    }
-    """
+    """rows: list of rows, each row is a list of N channel values (N = 58)."""
     rows: list[list[float]]
-
-
-class PredictResponse(BaseModel):
-    """
-    predictions: 0 = nominal, 1 = anomaly, one per input row
-    n_anomalies: total number of flagged rows
-    anomaly_rate: fraction of rows flagged
-    """
-    predictions: list[int]
-    n_anomalies: int
-    anomaly_rate: float
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -70,42 +79,40 @@ def root():
     }
 
 
-#@app.post("/predict") #, response_model=PredictResponse)
-@app.get("/predict")
-def predict_endpoint(): #request: PredictRequest):
+@app.get("/timeline")
+def timeline() -> list[dict]:
     """
-    Full prediction pipeline — delegates to predictor.predict()
-    1. Receive raw sensor rows from user
-    2. predictor.py handles: preprocess → load model → score → threshold
-    3. Return results as a dict
+    Precomputed prediction over the internal test_api slice.
+    Returns [{"id": int, "is_anomaly": 0|1}, ...].
     """
-    # if len(request.rows) == 0:
-    #     raise HTTPException(status_code=400, detail="No rows provided")
-
-    # n_feat = len(request.rows[0])
-    # if n_feat != 58:
-    #     raise HTTPException(
-    #         status_code=400,
-    #         detail=f"Expected 58 features per row, got {n_feat}"
-    #     )
-
-    # X_raw = np.array(request.rows, dtype=np.float32)
-
-    # # delegates everything to predictor.py
-    # result = run_predict(X_raw=X_raw)
-
-    # predictions = result["is_anomaly"].tolist()
-    # n_anomalies = int(sum(predictions))
-    # anomaly_rate = round(n_anomalies / len(predictions), 4)
-
-    # return PredictResponse(
-    #     predictions=predictions,
-    #     n_anomalies=n_anomalies,
-    #     anomaly_rate=anomaly_rate,
-    # )
-    return predict(model = app.state.model, scaler = app.state.scaler).to_dict()
+    return app.state.timeline
 
 
+@app.post("/predict")
+def predict_endpoint(request: PredictRequest) -> list[dict]:
+    """
+    Returns [{"id": int, "is_anomaly": 0|1}].
+    """
+    if len(request.rows) == 0:
+        raise HTTPException(status_code=400, detail="No rows provided")
+
+    n_feat_expected = len(app.state.features)
+    n_feat_got      = len(request.rows[0])
+    if n_feat_got != n_feat_expected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Expected {n_feat_expected} features per row, got {n_feat_got}",
+        )
+
+    X_raw = np.array(request.rows, dtype=np.float32)
+    sub = predict(
+        model    = app.state.model,
+        scaler   = app.state.scaler,
+        features = app.state.features,
+        X_raw    = X_raw,
+        threshold= app.state.threshold,
+    )
+    return sub.astype({"id": int, "is_anomaly": int}).to_dict(orient="records")
 
 
 ## ---------------------------------------------------------------------------------

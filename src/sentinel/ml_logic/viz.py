@@ -16,6 +16,7 @@ plot_score_distribution           — score histograms split by true label + thr
 plot_score_timeline               — score vs row index with threshold + GT shading
 plot_score_panels                 — 3-panel: scores, true anomalies, predicted anomalies
 plot_timeline                     — 2-panel: MSE (linear/log x/y) + true/predicted ribbon
+plot_event_analysis               — per-event detection bars + length-bucket summary
 plot_event_zoom_with_score        — channel zoom plus PCA score panel
 plot_confusion_and_channel_errors — confusion matrix + top-k channel MSE bar chart
 """
@@ -807,4 +808,108 @@ def plot_timeline(
     ax2.legend(handles=legend_handles, fontsize=8, loc="upper right")
 
     fig.tight_layout()
+    return fig
+
+
+def plot_event_analysis(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    *,
+    title: str = "Event analysis",
+    figsize: tuple = (16, 4),
+) -> plt.Figure | None:
+    """
+    Per-event detection diagnostic — three side-by-side panels:
+
+    1. Bar chart: counts of *Detected* vs *Missed* events.
+    2. Scatter:  event length (log-x) vs hit-rate, colored by detected.
+    3. Histogram of per-event hit-rate.
+
+    Style mirrors the z-score notebook (nb21) so the output is consistent
+    across baselines.
+
+    Parameters
+    ----------
+    y_true  : (n_rows,) 0/1 — ground-truth labels
+    y_pred  : (n_rows,) 0/1 — predictions at the chosen threshold
+    title   : figure suptitle
+    figsize : forwarded to plt.subplots
+
+    Returns
+    -------
+    fig : matplotlib Figure (or None if no events).  When events exist a
+          summary line is also printed listing missed events (start/end/length).
+    """
+    y_true = np.asarray(y_true, dtype=np.int8)
+    y_pred = np.asarray(y_pred, dtype=np.int8)
+    segments = find_anomaly_segments(y_true)
+
+    rows = []
+    for seg in segments:
+        s, e = seg["start"], seg["end"]
+        L    = seg["length"]
+        hits = int(y_pred[s:e + 1].sum())
+        rows.append({
+            "start"   : s,
+            "end"     : e,
+            "length"  : L,
+            "detected": hits > 0,
+            "hit_rate": round(hits / L, 3) if L > 0 else 0.0,
+        })
+    df = pd.DataFrame(rows)
+
+    if len(df) == 0:
+        print(f"{title}: no true events.")
+        return None
+
+    n_det  = int(df["detected"].sum())
+    n_miss = len(df) - n_det
+    n_ev   = len(df)
+
+    DET_COLOR = "#27ae60"
+    MIS_COLOR = ANOMALY_COLOR
+
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+    # ── Panel 1: detected vs missed counts ───────────────────────────────
+    ax = axes[0]
+    counts = pd.Series({"Detected": n_det, "Missed": n_miss})
+    bars = ax.bar(counts.index, counts.values, color=[DET_COLOR, MIS_COLOR],
+                  edgecolor="white", width=0.4)
+    for bar, v in zip(bars, counts.values):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 1.02,
+                str(v), ha="center", fontsize=11, fontweight="bold")
+    ax.set_title(f"Event Detection ({n_ev} events)", fontweight="bold")
+    ax.set_ylabel("Count")
+    ax.set_ylim(0, n_ev + 4)
+
+    # ── Panel 2: coverage vs event length ────────────────────────────────
+    ax2 = axes[1]
+    colors_pt = [DET_COLOR if d else MIS_COLOR for d in df["detected"]]
+    ax2.scatter(df["length"], df["hit_rate"], c=colors_pt, s=60, alpha=0.75,
+                edgecolors="white", lw=0.5)
+    ax2.set_xscale("log")
+    ax2.set_xlabel("Event length (rows, log scale)")
+    ax2.set_ylabel("Fraction of event flagged")
+    ax2.set_title("Coverage by Event Length", fontweight="bold")
+    ax2.set_ylim(-0.05, 1.05)
+    ax2.legend(handles=[
+        mpatches.Patch(color=DET_COLOR, label="Detected"),
+        mpatches.Patch(color=MIS_COLOR, label="Missed"),
+    ], fontsize=9)
+
+    # ── Panel 3: hit-rate distribution ───────────────────────────────────
+    ax3 = axes[2]
+    sns.histplot(df["hit_rate"], bins=20, ax=ax3, color="#8e44ad", edgecolor="white")
+    ax3.set_xlabel("Fraction of event rows flagged")
+    ax3.set_ylabel("Events")
+    ax3.set_title("Hit-rate Distribution", fontweight="bold")
+
+    fig.suptitle(title, fontsize=12, fontweight="bold")
+    fig.tight_layout()
+
+    if n_miss:
+        print("Missed events:")
+        print(df[~df["detected"]][["start", "end", "length"]].to_string(index=False))
+
     return fig
