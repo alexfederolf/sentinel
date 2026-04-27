@@ -115,17 +115,41 @@ def predict_endpoint(request: PredictRequest) -> list[dict]:
     return sub.astype({"id": int, "is_anomaly": int}).to_dict(orient="records")
 
 
-## WORK HERE ON ALEX
-## add this one for another type of input
-@app.get("/predict_by_date")
-def predict_endpoint_by_date(start: str, end: str) -> list[dict]:
+@app.get("/predict_by_id")
+def predict_endpoint_by_id(start: int, end: int) -> list[dict]:
     """
-    Filter the cached timeline by date range.
-    Returns [{"id": int, "is_anomaly": 0|1}] for rows within [start, end].
-    TODO: implement date filtering once timestamp data is available.
+    Filter the cached timeline by ID range [start, end] inclusive.
+    Returns [{"id": int, "is_anomaly": 0|1}].
     """
-    # Stub — returns full timeline until date mapping is wired up
-    return app.state.timeline
+    return [r for r in app.state.timeline if start <= r["id"] <= end]
+
+
+@app.get("/report")
+def report_endpoint(topk: int = 6) -> dict:
+    """
+    Full anomaly report over the cached test_api slice.
+    Returns row_scores, per_channel_mse, topk_channels, threshold, features.
+    """
+    from sentinel.ml_logic.predictor import predict_report
+
+    X_api = np.load(PROCESSED_DIR / "test_api.npy")
+    rep = predict_report(
+        model     = app.state.model,
+        scaler    = app.state.scaler,
+        features  = app.state.features,
+        X_raw     = X_api,
+        threshold = app.state.threshold,
+        topk      = topk,
+    )
+    return {
+        "row_scores"      : rep["row_scores"].tolist(),
+        "per_channel_mse" : rep["per_channel_mse"].tolist(),
+        "topk_channels"   : rep["topk_channels"].tolist() if rep["topk_channels"] is not None else None,
+        "threshold"       : rep["threshold"],
+        "features"        : rep["features"],
+        "n_anomalies"     : int((rep["labels"] == 1).sum()),
+        "anomaly_rate"    : round(float(rep["labels"].mean()), 4),
+    }
 
 
 
