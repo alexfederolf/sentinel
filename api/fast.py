@@ -65,6 +65,7 @@ async def lifespan(app: FastAPI):
         "anomaly_rate"   : round(float(rep["labels"].mean()), 4),
     }
     print("✅ Report cached")
+    app.state.X_api = X_api  # cache raw values for /channels endpoint
     yield
 
 
@@ -105,6 +106,37 @@ def predict_by_id(start: int, end: int) -> list[dict]:
 def report() -> dict:
     """Cached full report: row_scores, per_channel_mse, topk_channels, anomaly_rate."""
     return app.state.report
+
+
+@app.get("/channels")
+def channels(channel: str, start: int = 0, end: int = 149999) -> list[dict]:
+    """
+    Raw signal values for a single channel over an ID range.
+    Returns [{"id": int, "value": float, "is_anomaly": 0|1}].
+    """
+    if channel not in app.state.features:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown channel '{channel}'. Available: {app.state.features}",
+        )
+
+    col_idx = app.state.features.index(channel)
+    timeline = {r["id"]: r["is_anomaly"] for r in app.state.timeline}
+
+    result = []
+    for i in range(start, min(end + 1, len(app.state.X_api))):
+        result.append({
+            "id"        : i,
+            "value"     : float(app.state.X_api[i, col_idx]),
+            "is_anomaly": timeline.get(i, 0),
+        })
+    return result
+
+
+@app.get("/features") # --> get channel info (names)
+def features() -> list[str]:
+    """Returns the list of available channel names."""
+    return app.state.features
 
 
 @app.post("/predict")
