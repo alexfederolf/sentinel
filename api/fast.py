@@ -115,6 +115,20 @@ def predict_endpoint(request: PredictRequest) -> list[dict]:
     return sub.astype({"id": int, "is_anomaly": int}).to_dict(orient="records")
 
 
+## WORK HERE ON ALEX
+## add this one for another type of input
+@app.get("/predict_by_date")
+def predict_endpoint_by_date(start: str, end: str) -> list[dict]:
+    """
+    Filter the cached timeline by date range.
+    Returns [{"id": int, "is_anomaly": 0|1}] for rows within [start, end].
+    TODO: implement date filtering once timestamp data is available.
+    """
+    # Stub — returns full timeline until date mapping is wired up
+    return app.state.timeline
+
+
+
 ## ---------------------------------------------------------------------------------
 ## ---------------------------------------------------------------------------------
 ### OLD STRCUTURE OF API, NOW DELETED
