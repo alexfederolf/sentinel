@@ -30,6 +30,7 @@ COPY api ./api
 
 COPY models ./models
 COPY data/raw/target_channels.csv ./data/raw/target_channels.csv
+COPY data/raw/target_channels_fe.csv ./data/raw/target_channels_fe.csv
 
 COPY data/processed/test_api_fe.npy ./data/processed/test_api_fe.npy
 COPY data/processed/y_test_api_fe.npy ./data/processed/y_test_api_fe.npy

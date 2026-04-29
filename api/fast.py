@@ -8,6 +8,8 @@ GET  /timeline       → cached labels for the test_api_fe slice
 GET  /predict_by_id  → filter cached timeline by ID range
 GET  /report         → cached anomaly report (row scores, per-channel MSE,
                        top channels per window, threshold)
+GET  /channels       → raw signal values + anomaly label for a single channel
+GET  /features       → list of available channel names (58ch)
 POST /predict        → score user-supplied raw 58-channel rows using the
                        cached FE bundle
 
