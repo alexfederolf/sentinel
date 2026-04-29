@@ -208,7 +208,7 @@ def event_detection_rate(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
 def point_adjust_f1(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     """
-    Standard point-adjust F1 (Xu et al. 2018): within each true event, if any
+    Standard point-adjust F1: within each true event, if any
     predicted row is positive, mark the entire event as predicted. Then
     compute point-level precision / recall / F1 on the adjusted prediction.
 

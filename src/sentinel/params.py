@@ -56,10 +56,11 @@ ANOMALY_COLOR = '#e74c3c'
 NOMINAL_COLOR = '#2980b9'
 
 # ── Trained model thresholds ──────────────────────────────────────────────────
+
 # Tuned on val set with event-wise F0.5
-#PCA_THRESHOLD = 0.060219   # from pca-full: PCA k=39, all 92k nominal windows
-# PCA_THRESHOLD = 0.060404   # from pca: PCA k=39, 35k nominal windows (70 % of 50k)
-PCA_THRESHOLD = 0.053293   # recalibrated for current pca.pkl (scores range 0.030–0.059)
+PCA_THRESHOLD = 0.060404 # tuned on PCA in NB11 with event-wise F0.5 (not ESA)
+# PCA_THRESHOLD = 0.053293   # manuelly changes for FE
+
 LSTM_THRESHOLD = 1.323612  # from lstm: LSTM k=16, 35k nominal windows (70 % of 50k)
 
 # Detrended-score thresholds (tuned on detrended val, see NB 20).
