@@ -89,7 +89,7 @@ def test_predict_report_returns_expected_keys_and_shapes(fitted_stack):
     )
     assert set(out) == {
         "labels", "row_scores", "window_scores",
-        "per_channel_mse", "window_channel_mse", "topk_channels",
+        "per_channel_mse", "window_channel_mse", "window_top_channels",
         "threshold", "features",
     }
     n_rows = len(s["df"])
@@ -100,7 +100,7 @@ def test_predict_report_returns_expected_keys_and_shapes(fitted_stack):
     assert out["window_scores"].shape      == (s["n_win"],)
     assert out["per_channel_mse"].shape    == (n_feat,)
     assert out["window_channel_mse"].shape == (s["n_win"], n_feat)
-    assert out["topk_channels"] is None
+    assert out["window_top_channels"] is None
     assert out["threshold"] == pytest.approx(1e9)
     assert out["features"]  == s["features"]
 
