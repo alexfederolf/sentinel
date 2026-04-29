@@ -29,6 +29,8 @@ data/processed/*
 # without running the preprocessing pipeline on every build.
 !data/processed/test_api.npy
 !data/processed/y_test_api.npy
+!data/processed/test_api_2.npy
+!data/processed/y_test_api_2.npy
 
 # ── Tool / test caches ────────────────────────────────────────────────────────
 .pytest_cache/
