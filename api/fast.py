@@ -6,7 +6,7 @@ Endpoints
 GET  /               → health check
 GET  /timeline       → cached labels for the test_api slice
 GET  /predict_by_id  → filter cached timeline by ID range
-GET  /report         → cached full anomaly report (scores, per-channel MSE, top-k)
+GET  /report         → cached anomaly report (scores, per-channel MSE, top channels per window, threshold)
 POST /predict        → score user-supplied rows using the cached model + scaler
 
 All heavy computation runs once at startup and is cached in app.state.
@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     app.state.features  = load_target_channels()
     app.state.threshold = PCA_THRESHOLD
 
-    X_api = np.load(PROCESSED_DIR / "test_api.npy")
+    X_api = np.load(PROCESSED_DIR / "test_api_2.npy")
 
     print("⏳ Running cached prediction over test_api slice …")
     sub = predict(
@@ -47,20 +47,41 @@ async def lifespan(app: FastAPI):
     print(f"✅ Timeline cached: {len(app.state.timeline):,} rows")
 
     print("⏳ Computing report cache …")
+
+
     rep = predict_report(
         model     = app.state.model,
         scaler    = app.state.scaler,
         features  = app.state.features,
         X_raw     = X_api,
         threshold = app.state.threshold,
-        topk      = 6,
+        # topk = 6      for LSTM/CNN only (changes scoring!)
+        n_top_channels = 6,   # diagnostic top contributing channels per WINDOW (does not change scoring)
     )
     app.state.report = {
+        # Per-row reconstruction MSE (PCA default = mean over all used channels)
         "row_scores"     : rep["row_scores"].tolist(),
-        "per_channel_mse": rep["per_channel_mse"].tolist(),
-        "topk_channels"  : rep["topk_channels"].tolist() if rep["topk_channels"] is not None else None,
+
+        # per-channel overall reconstruction errors (MSE)
+        # sortable by most contributing channel for anomaly detection
+        "per_channel_mse": [
+            {"channel": ch, "mse": float(mse)}
+            for ch, mse in zip(rep["features"], rep["per_channel_mse"])
+        ],
+
+        # TODO: to decide if needed. Other window metrics not used: window_scores, window_channel_mse
+        # OLD naming: topk_channels
+        # Indices of the n_top_channels with the largest MSE PER WINDOW, ranked descending
+        "window_top_channels": rep["window_top_channels"].tolist(),
+
+        # threshold set by threshold tuning on val set with relevant metric
         "threshold"      : rep["threshold"],
+        # TODO: metric used for tuning (current event F0.5, which makes no sense for current FE)
+
+        # list of all channels used in the model
         "features"       : rep["features"],
+
+        # row-based #anomalies & anomaly rate
         "n_anomalies"    : int((rep["labels"] == 1).sum()),
         "anomaly_rate"   : round(float(rep["labels"].mean()), 4),
     }
@@ -103,7 +124,7 @@ def predict_by_id(start: int, end: int) -> list[dict]:
 
 @app.get("/report")
 def report() -> dict:
-    """Cached full report: row_scores, per_channel_mse, topk_channels, anomaly_rate."""
+    """Cached report: row_scores, per_channel_mse (named), window_top_channels, threshold, features, anomaly_rate."""
     return app.state.report
 
 
