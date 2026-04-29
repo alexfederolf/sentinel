@@ -473,3 +473,81 @@ def score_windows_detrended(
         win_scores, n_rows=X_rows.shape[0],
         window=detrend_window, mode=detrend_mode, win=win,
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Prediction post-processing — block-length filter
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Recall-tuned thresholds (e.g. NB 31's nom_p95) generate many short isolated
+# predicted blocks where the score grazes the threshold inside nominal regions.
+# Real ESA-ADB events are typically hundreds-to-thousands of rows long, so two
+# simple post-processing rules clean up the timeline without losing recall:
+#
+#   1. Merge predicted blocks separated by short gaps (≤ ``max_gap`` rows).
+#   2. Drop predicted blocks shorter than ``min_len`` rows.
+#
+# Used by the FE pipeline (NB 22c) to turn a 100k-FP-row scatter into a
+# small number of clean event blocks.
+
+def clean_predictions(
+    y_pred: np.ndarray,
+    min_len: int = 500,
+    max_gap: int = 0,
+) -> np.ndarray:
+    """
+    Post-process a binary prediction array: merge near-adjacent blocks,
+    then drop blocks shorter than ``min_len``.
+
+    Parameters
+    ----------
+    y_pred : (n_rows,) array of 0/1
+        Row-level predicted labels (e.g. from ``score > threshold``).
+    min_len : int, default 500
+        Minimum predicted-block length in rows. Anything shorter is zeroed.
+        Must be >= 1.
+    max_gap : int, default 0
+        If > 0, runs of zeros up to ``max_gap`` rows long that sit *between*
+        two predicted-positive runs are filled with 1s before the min-length
+        filter is applied. Useful when a single event is split into two
+        predicted blocks by a brief score dip below threshold.
+
+    Returns
+    -------
+    (n_rows,) int8 array — cleaned labels.
+
+    Notes
+    -----
+    Operates only on the prediction array, not on the underlying scores or
+    ground truth. Idempotent for ``max_gap=0`` only — gap-filling is a
+    one-shot operation; running it twice with the same gap is the same as
+    running it once.
+    """
+    y = np.asarray(y_pred, dtype=np.int8).copy()
+    if y.ndim != 1:
+        raise ValueError(f"y_pred must be 1D, got shape {y.shape}")
+    if min_len < 1:
+        raise ValueError(f"min_len must be >= 1, got {min_len}")
+    if max_gap < 0:
+        raise ValueError(f"max_gap must be >= 0, got {max_gap}")
+
+    # Step 1 — fill short gaps between predicted-positive runs.
+    if max_gap > 0:
+        padded = np.concatenate(([1], y, [1]))      # treat the array boundaries as positive
+        d      = np.diff(padded.astype(np.int8))
+        gap_starts = np.where(d == -1)[0]            # 1 → 0 transitions in padded
+        gap_ends   = np.where(d ==  1)[0] - 1        # 0 → 1 transitions in padded
+        for s, e in zip(gap_starts, gap_ends):
+            if 1 <= s and e <= len(y) - 2 and (e - s + 1) <= max_gap:
+                y[s:e + 1] = 1
+
+    # Step 2 — drop predicted-positive runs shorter than min_len.
+    padded = np.concatenate(([0], y, [0]))
+    d      = np.diff(padded.astype(np.int8))
+    starts = np.where(d ==  1)[0]
+    ends   = np.where(d == -1)[0] - 1
+    for s, e in zip(starts, ends):
+        if (e - s + 1) < min_len:
+            y[s:e + 1] = 0
+
+    return y

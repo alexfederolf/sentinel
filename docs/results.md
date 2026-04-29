@@ -125,6 +125,8 @@ Of 76 sensor channels, 58 are competition-relevant (`data/raw/target_channels.cs
 - `scorer.score_windows(model, X_rows, win=100, topk=None)` — reshape rows into non-overlapping windows, compute reconstruction MSE, broadcast back to rows. The smoothing this provides is what keeps `FP_pred_events = 0` (see §3).
 - `metrics.corrected_event_f05` — the Kaggle metric. Always tune on this.
 - `thresholds.tune_threshold(scores, y_true, metric_fn, n_sweep=80)` — log-spaced sweep, argmax the metric.
+- `fusion.fusion_diagnostics(y_base, y_new, y_true)` — segment-aware OR-fusion safety check. Counts `FP_pred_events`, not rows; returns verdict ∈ {`reject`, `borderline`, `submit`, `submit_strong`}. Use **before** any OR-fusion submission. Added 2026-04-29 after the freq6 fusion lost 0.070 private (§4.1).
+- `cv.run_cv(env_ma_window=...)` / `cv.run_sweep([...])` — rolled-origin K-fold CV harness. Tunes `(thr_freq, k_env, thr_env)` on each of 5 expanding-origin folds, reports threshold variance, evaluates averaged thresholds on held-out test_internal at two fit-window choices (Mode A: 11d-equivalent fit; Mode B: full-CV fit). The `val→test_B gap` correlates monotonically with the Kaggle private gap (validated 2026-04-29 across ma_w ∈ {5k, 7k, 20k}). Use **before** any submission with `gap ≤ 0.10` as the gate. CLI: `python -m sentinel.ml_logic.cv --sweep`.
 - `viz.plot_timeline`, `viz.plot_event_analysis` — standard timeline + per-event detection visualisations.
 
 ### Constants (`src/sentinel/params.py`)
@@ -171,6 +173,24 @@ The pathology that contaminated every "0.98 Event F0.5 on test_intern" headline 
 - Timeline plot showing one contiguous predicted block starting mid-test.
 
 **What fixes it:** any of the three drift-mitigation layers in §3.2.
+
+### 4.1 The fusion failure mode (sister pathology)
+
+Adding a low-flag-rate stream as a 3rd OR channel sounds free — "+300 rows is only +0.058 pp flag rate, can't hurt much." It can. F0.5 counts **`FP_pred_events`** (contiguous predicted segments outside any true event), not rows.
+
+**The math.** Window-MSE scoring produces 100-row contiguous blocks. If the 3rd stream's flags land outside true events, every isolated 100-row block is a fresh `FP_pred_event`. A hybrid sitting near `Pr_ew = 1.0` (no FP segments) loses substantially per added FP segment:
+
+```
+Pr_ew_new = TP_events / (TP_events + new_FP_segments)
+```
+
+With ~16 true events caught and 0 → 4 new FP segments, `Pr_ew` drops 1.00 → 0.80 → `Pr_c` drops 20 % → F0.5 drops ≈ 0.06–0.08. Exactly what the freq6 fusion submission cost (private 0.915 → 0.845).
+
+**The fusion-check rule (now mandatory in `scripts/fusion_check.py`):** before any OR-fusion submission, verify on `test_internal`:
+1. **`Δ TP_events ≥ Δ FP_pred_events`** (the new stream catches at least as many missed events as it adds false segments).
+2. The flag-rate delta ≤ 0.2 pp on Kaggle (necessary but **not sufficient** — see above).
+
+If rule 1 fails, do not submit, regardless of how clean the row-count looks.
 
 ---
 
@@ -251,6 +271,10 @@ The **+0.030 public was real**, but the **−0.012 private was the actual cost**
 |---|---|---:|---:|---:|---:|---|
 | `pca_hybrid_envzscore_BEST.parquet` ⭐ | NB 11d hybrid (PCA 41-46 + env z-score 14/21/29, ma_w=5k) | **9** | 0.867 | **0.915** | +0.048 | **Current champion.** Bit-identical to Ekaterina's `submissions/pca_pca_6ch_zsenv_3ch.parquet`. |
 | `pca_zsenv_..._k1_20260429_043247.parquet` | Same architecture, `ma_w=20_000` + joint thr | 9 | 0.897 | 0.903 | +0.006 | Won public, lost private — sharp local-test optimum overfit. |
+| `pca_hybrid_envzscore_ma_w_7000_*.parquet` | Same architecture, `ma_w=7_000` (single-split, k=3) | 9 | 0.867 | 0.913 | +0.046 | **CV-harness ablation, near-tie.** Public bit-identical to champion (0.867); private −0.002 (0.913 vs 0.915). The harness flagged 7k as "fit-window-sensitive" (Mode A 0.8415 vs Mode B 0.7622 on test_internal) and Kaggle confirmed the marginal loss. Validates harness's val→test gap as a usable proxy for Kaggle private gap. |
+| `fused_hybrid_OR_lstmforecast12c_freq6_*.parquet` | NB 11d hybrid OR NB 12c LSTM-Forecaster on freq 41-46 | 9 | 0.830 | 0.845 | +0.015 | **Documented loss.** OR-fusion only added 300 rows (+0.058 pp flag rate) but those rows formed 3-4 isolated 100-row blocks → +3-4 `FP_pred_events`. `Pr_ew` dropped from ~1.0 to ~0.85, F0.5 collapsed. **Lesson: count `FP_pred_events`, not rows, in fusion checks (§4 + §1).** |
+| _(not submitted)_ NB 12c LSTM-Forecaster on raw `channel_14, 21, 29` | env3 raw-channels variant | 3 | — | — | — | **Drift-flood, not submitted.** Forecaster trained on early data; channels shift +5σ on Kaggle test → forecast residuals saturate everywhere → val-tuned threshold below entire Kaggle score range (0.063 vs Kaggle range [4.35, 10.87]) → 100 % flag rate. Same architecture-independent failure as NB 12 / 12b / 13 (§4). |
+| _(not submitted)_ NB 12c LSTM-Forecaster on **env-residual** of `channel_14, 21, 29` | env3 drift-corrected variant | 3 | — | — | — | **No value-add, not submitted.** Drift-corrected input avoids the flood (Kaggle range [0.0001, 98] with p99=1.12, normal scale). Segment-aware gating (`fusion.fusion_diagnostics`) on test_internal at threshold ti-p99 = 3.36 says SUBMIT (+1 TP / +0 FP events). **But** at that threshold the forecaster's Kaggle positives are a strict subset of the hybrid's (`12c ∩ Kaggle ⊆ hybrid ∩ Kaggle`), so OR-fused output is bit-identical to `pca_hybrid_envzscore_BEST.parquet` (7,937 / 7,937 rows match). Submission would just re-score 0.867/0.915. |
 | `pca_nb11c_6ch_BEST.parquet` | NB 11c (PCA on freq 41-46) | **6** | 0.897 | 0.887 | −0.010 | The big jump from full-58. Was champion before hybrid. |
 | `pca_nb11_ch_sel*.parquet` | NB 11e (9-channel selection: 41-46 + 17/25/34) | 9 | 0.832 | 0.853 | +0.021 | Val-overfit; 9 channels including 17/25/34 added drift on Kaggle. |
 | `nb20_pca_median.parquet` | NB 20 (PCA + score-level median detrend) | **58** | 0.454 | 0.599 | +0.145 | Ties NB 04 on private; loses 0.068 public. Detrend helps drift-heavy private half. |
@@ -286,13 +310,27 @@ These notebooks explored alternative metrics or research directions and are **no
 Ranked by expected impact on Kaggle private:
 
 1. **Submission ensembling** — union-OR of `pca_hybrid_envzscore_BEST.parquet` (private 0.915) with a complementary high-precision submission. If they catch different events, private may exceed both. Cheap to try.
-2. **Sweep `ENV_MA_WINDOW ∈ {3k, 5k, 7k, 10k}` and submit each.** Don't trust local val — it picked 20k and that overfit. Submit them blind and read Kaggle.
-3. **Cross-validate threshold selection on rolled splits** (multiple val windows averaged) instead of the fixed `TRAIN_END=10.7M / VAL_END=12.7M`. Reduces single-split overfitting that produced the ma_w=20k regression.
+2. ~~**Sweep `ENV_MA_WINDOW` and submit each.**~~ **Closed 2026-04-29.** CV harness (item 3) eliminated 10k and 20k from contention. The single remaining candidate `ma_w=7k` was submitted and scored **public 0.867 / private 0.913** — bit-identical public, −0.002 private vs champion. Direction fully exhausted: 5k is the optimum across all tested values. The harness's `val→test_B` gap (5k: 0.084 < 7k: 0.129 < 20k: 0.197) correlates monotonically with the Kaggle private loss (5k: champion < 7k: −0.002 < 20k: −0.012). Use this gap as the future submission gate.
+3. **Cross-validate threshold selection on rolled splits** (multiple val windows averaged) instead of the fixed `TRAIN_END=10.7M / VAL_END=12.7M`. Reduces single-split overfitting that produced the ma_w=20k regression. **Update 2026-04-29:** built `/tmp/cv_harness.py` (5 expanding-origin folds spanning rows 2.5M–12.7M, val width 2M, held-out test [12.7M, 14.7M]) and ran it across `ENV_MA_WINDOW ∈ {3k, 5k, 7k, 10k, 20k}`. Findings:
+   - **Threshold variance is large**: `thr_freq` CV ≈ 24 % across folds (mean 0.0356 ± 0.0086, identical for all ma_w because the freq stream is independent of `ma_w`); `thr_env` CV ≈ 33–62 % depending on ma_w. The single-split NB 11d threshold isn't a stable optimum — it's tuned to fold 4 (val=10.7M-12.7M), and other folds prefer noticeably different thresholds.
+   - **The harness reproduces NB 11d exactly on fold 4**: thr_freq=0.0281, k_env=2, thr_env=1.237, val F0.5=0.9391 — bit-identical to the champion notebook's reported numbers.
+   - **ma_w=20k is provably overfit by the harness**: highest mean val F0.5 (0.9216 ± 0.0379) but Mode B held-out test = 0.7253 → gap 0.196. The val→test divergence the harness sees mirrors the val=0.9214 / private=0.903 production failure.
+   - **ma_w=5k is the most balanced**: val F0.5=0.9055 ± 0.063, Mode B held-out test = 0.8211 (gap 0.084). Mode B essentially reproduces the champion's local Test=0.8216 with averaged thresholds. Confirms 5k > 20k for generalisation.
+   - **ma_w=7k is a candidate ablation**: highest Mode A held-out test (0.8415, fit on [0, 10.7M) like NB 11d, with CV-averaged thresholds). But Mode B drops to 0.7622 — high sensitivity to fit-window means it's not robust either. Worth submitting once to Kaggle as an ablation, not as champion replacement.
+   - **Conclusion**: the CV harness is now the reliable diagnostic for "is this val score overfit?". Use it before any future submission. The harness is at `/tmp/cv_harness.py`; promote to `src/sentinel/ml_logic/cv.py` if it survives one more use cycle. The current champion (ma_w=5k) remains the recommended submission.
 4. **Soft-OR fusion** — combined_score = `freq_norm + α · env_norm` for α ∈ {0.5, 1, 2}. Smoother than hard OR; may give better threshold transfer.
-5. **Forecast-residual stream as a third OR channel** — AR(p) per channel on the env channels, score = |residual|. Different failure mode than envelope-MA, may catch the 4 ultra-short events the current hybrid misses without flooding.
+5. **Forecast-residual stream as a third OR channel** — AR(p) per channel on the env channels, score = |residual|. Different failure mode than envelope-MA, may catch the 4 ultra-short events the current hybrid misses without flooding. Non-linear variant: an LSTM forecaster (predict next window from previous) instead of AR(p) — same residual-as-score idea. **Update 2026-04-29:** the LSTM-forecaster variant has now been tested as NB 12c in two configurations (freq 41-46 → submitted, lost 0.070 private; env3 raw → drift-flood; env3 env-residual → bit-identical to hybrid on Kaggle, no value-add). The forecaster idea is **exhausted** for now on this dataset; AR(p) is still untested but inherits the same input-drift sensitivity. Lower priority than items 2/3.
 6. **Shorter PCA windows (`WINDOW_SIZE=25` or `50`)** specifically for ultra-short events. Tested as 3rd-stream addition (failed locally with flag rate 4.5 %), but as a *replacement* for the freq stream's window=100 it's untested on Kaggle.
+7. **Re-test LSTM-AE / CNN-AE on the drift-mitigated input.** The deep autoencoders (NB 12, NB 12b, NB 13) only ever saw the **full 58 channels** — and they all collapsed via drift-flood (Kaggle 0.078–0.238). They were never trained on the **6 stable freq channels** (the recipe that lifted PCA from 0.522 → 0.887) or on **envelope-residuals of the drifters**. Two specific configurations worth submitting:
+   - LSTM-AE on `channel_41..46` only, `WINDOW_SIZE=100`, fit on tail-50 k nominal windows of Kaggle-train. Direct apples-to-apples replacement for the freq stream of the hybrid.
+   - LSTM-AE on the envelope-residual sequence of `channel_14, 21, 29` (after `rolling_min(env_w=200) − centered_MA(ma_w=5_000)`). Drift-corrected input, sequence model on top. Could become a third OR stream in the hybrid.
+   - CNN-AE has the same status: untested on the restricted channel set. Conditional priority — only worth doing after the LSTM-AE-on-6-channels result is in.
+
+   Caveat: §3.2's headline finding still applies — *given the same drift-mitigation recipe, architecture is a smaller lever than recipe*. Don't expect a leap over 0.915 from architecture alone; expect at best a complementary stream that catches different events than PCA does.
 
 Anything that **catches more events** has to be checked for flag-rate inflation on Kaggle test specifically. Local-test recall ≠ Kaggle-private recall.
+
+**Why "just retrain LSTM-AE" is *not* in this list:** retraining the same NB 12 / NB 12b / NB 13 setup on full-58 channels is a known-failed direction — drift-flood is architecture-independent (§4). The open directions above all change the *input* (restricted channels, env-residuals, forecast targets), not just the model class.
 
 ---
 
@@ -312,3 +350,113 @@ ENV_NAMES     = ['channel_14', 'channel_21', 'channel_29']  # 3 channels
 Run the notebook end-to-end on the Kaggle split (`DATA_SOURCE='kaggle'`). The submission cell writes `kaggle/submissions/pca_zsenv_{tag}_{ts}.parquet`. The output is bit-identical to `submissions/pca_pca_6ch_zsenv_3ch.parquet` (already on the leaderboard at private 0.915) — verified row-by-row, 521,280/521,280 match.
 
 **Pinned constants** (`src/sentinel/params.py`): `WINDOW_SIZE=100`, `FIT_SIZE=50_000`, `RANDOM_STATE=42`. Blessed pickles (do not overwrite): `models/pca.pkl`, `models/pca_kaggle.pkl`, `models/lstm_ae.keras`, `models/cnn_ae.keras`, `models/scaler.pkl`. Experiments save with `_nb{XX}_{YYYYmmdd_HHMMSS}` suffix.
+
+---
+
+## 10. Session log
+
+### 2026-04-29 — Fusion safety, forecaster directions, CV harness
+
+**Goal entering session:** push private leaderboard above the 0.915 champion via (a) a complementary OR-fusion stream and (b) more robust threshold tuning.
+
+**Submissions made (1 ablation, 1 documented loss, 2 internal-only experiments):**
+
+| Submission | Public | Private | Δ vs champion | Verdict |
+|---|---:|---:|---:|---|
+| `fused_hybrid_OR_lstmforecast12c_freq6_*.parquet` | 0.830 | 0.845 | −0.070 | **Documented loss.** OR-fused with LSTM-Forecaster on freq 41-46. Naive row-count fusion check (+0.058 pp flag rate) said "safe" but added 3-4 isolated 100-row blocks → +3-4 `FP_pred_events` → `Pr_ew` collapsed. |
+| `pca_hybrid_envzscore_ma_w_7000_*.parquet` | 0.867 | 0.913 | −0.002 | **Near-miss.** Public bit-identical to champion; private just below. Validated the CV harness's `val→test_B gap` as a private-leaderboard-loss proxy. |
+| _(not submitted)_ NB 12c env3 raw `channel_14/21/29` | — | — | — | Drift-flooded (val-thr below entire Kaggle range → 100% flag). Same architecture-independent failure as full-58 LSTM-AE / CNN-AE. |
+| _(not submitted)_ NB 12c env3 env-residual stream | — | — | — | Drift avoided ✓; segment-aware verdict said SUBMIT at thr ti-p99=3.36 (+1 TP / +0 FP); but Kaggle output was bit-identical to champion (forecaster's positives are subset of hybrid's) → no information gain. |
+
+**Infrastructure added:**
+
+- **`src/sentinel/ml_logic/fusion.py`** — `fusion_diagnostics(y_base, y_new, y_true)` returns segment-counted verdict in {`reject`, `borderline`, `submit`, `submit_strong`}. Counts `FP_pred_events`, **not rows** — see §4.1 for why row-counting is misleading. Made the env-residual no-op visible before submission, prevented a redundant Kaggle slot.
+- **`src/sentinel/ml_logic/cv.py`** — `run_cv(env_ma_window=...)` / `run_sweep([...])` 5-fold expanding-origin CV. Reproduces NB 11d val=0.9391 / k=2 / thr_freq=0.0281 bit-identically on fold 4. Sweep across ma_w ∈ {3k, 5k, 7k, 10k, 20k} eliminated 10k and 20k pre-submission; the surviving candidate (7k) was submitted and lost 0.002 — within harness's predicted "uncertain" band. CLI: `python -m sentinel.ml_logic.cv --sweep`.
+- **`notebooks/12c-lstm_forecaster.ipynb`** — 27-cell LSTM-Forecaster pipeline with MODE toggle (freq6 / env3). Submission cell commented out by default.
+
+**Empirical result, sorted by private:**
+
+| Approach | Public | **Private** | val→test_B gap (CV) |
+|---|---:|---:|---:|
+| **Champion (ma_w=5k)** ⭐ | 0.867 | **0.915** | 0.084 |
+| ma_w=7k ablation | 0.867 | 0.913 | 0.129 |
+| ma_w=20k (March overfit) | 0.897 | 0.903 | 0.197 |
+| freq6 fusion | 0.830 | 0.845 | n/a (fusion, not single-stream) |
+
+**The CV harness's val→test_B gap correlates monotonically with the private loss across all submitted configs.** Use it as the submission gate going forward.
+
+**Directions exhausted:**
+
+- ENV_MA_WINDOW: all five values tested. 5k optimal; no further submissions in this direction.
+- LSTM-Forecaster as 3rd OR stream: three input variants (freq6, env3-raw, env3-envresid) all failed. Forecast-residual approach doesn't add complementary signal on this dataset; AR(p) untested but inherits the same input-drift sensitivity. Lower priority than items 1, 4, 6, 7 in §8.
+
+**Champion remains:** `pca_hybrid_envzscore_BEST.parquet`, public 0.867 / private 0.915, ma_w=5_000.
+
+**Open items going into next session (ranked by expected impact, see §8):**
+
+1. Submission ensembling — union-OR of champion with a complementary high-precision submission. Cheap to try, **gated on `cv.run_cv(...)` + `fusion.fusion_diagnostics(...)`** before submitting.
+2. Cross-validate threshold selection on rolled splits — **DONE** via `cv.py`. Use it.
+4. Soft-OR fusion `α · freq + β · env` — untested.
+6. Shorter PCA windows (25/50) as freq-stream replacement — untested on Kaggle.
+7. LSTM-AE / CNN-AE on drift-mitigated input — untested.
+
+---
+
+## 11. Final Evaluation (FE) pipeline
+
+Distinct from Kaggle. The FE demo scores a 300 k-row internal slice through the API and a notebook walkthrough. The model and recipe come from **NB 11e** with `PRUNE_AGGRESSIVE=True` (46-channel variant), not from the Kaggle champion (NB 11d hybrid).
+
+### 11.1 Why a different model than Kaggle
+
+NB 11e produces two artefacts (see its title cell):
+- **49 channels** (`PRUNE_AGGRESSIVE=False`) — Kaggle internal-test ESA F0.5 0.853, beats 46ch on the public leaderboard.
+- **46 channels** (`PRUNE_AGGRESSIVE=True`) — Kaggle internal-test ESA F0.5 0.810 but **0.818 on the FE internal-test slice (post-filter)** vs 0.716 / 0.753 for ESA-baseline / 49ch / 58ch under the same recipe. **46ch wins on the FE proxy and is what the demo shows.** This is recorded in memory `project_nb11d_variants` and is the reason FE diverges from Kaggle.
+
+### 11.2 Blessed FE artefacts
+
+| File | Contents |
+|---|---|
+| `models/pca_fe_46ch.pkl` | Trained PCA (46 channels × 100 rows = 4 600-dim windows, 316 components, EV 0.950) |
+| `models/scaler_fe.pkl` | StandardScaler fit on the same tail-50 k nominal slice |
+| `models/fe_46ch_20260429_153751.json` | Sidecar — threshold, post-filter, fit config, val/test metrics, channel list |
+| `data/raw/target_channels_fe.csv` | The 46 FE channels (76 total − Tier A drifters 64-66/70-76 − Tier B 16/24/32) |
+| `data/processed/test_api_fe.npy` + `y_test_api_fe.npy` | 300 000-row demo slice (rows 14 175 000 – 14 475 000 of train.parquet, 6 events, 47.6 % anomaly density) |
+
+Sidecar key values (frozen at train time, do not retune in the demo):
+
+| Field | Value |
+|---|---|
+| `threshold` | **0.001 970** (tuned via `tune_threshold(corrected_event_f05)` on val 10.7 M – 12.7 M) |
+| `val_esa_f05` | 0.8534 |
+| `input_detrend` | rolling **median**, window 100 000 rows (per-channel input detrend before scaling/PCA) |
+| `score_detrend` | rolling **median**, window 1 000 windows (= 100 000 rows) on the row-broadcast scores |
+| `post_filter` | `clean_predictions(min_len=100, max_gap=500)` — gap-fill ≤ 500-row gaps, then drop blocks shorter than 100 rows |
+| `fit` | `tail_50k_NB11e`, `train_end=10 700 000`, `random_state=42` |
+
+Internal-test (12.7 M – 14.7 M) ESA F0.5: **0.717 baseline → 0.818 with post-filter** (events 14/25, TNR 0.991, flag rate 4.2 %, predicted blocks 36 → 19). The post-filter is the single biggest lift on this slice — `min_len=100` removes spurious singleton windows; `max_gap=500` merges fragmented event-coverage into one segment so the same physical event isn't double-counted as 2-3 false segments.
+
+### 11.3 Inference path
+
+`src/sentinel/ml_logic/predictor.py::predict_fe46(X_raw, model, scaler, features, threshold, …)` — applies the NB 11e recipe (per-channel input detrend, scale, window-MSE, score-level detrend, threshold, post-filter) and returns `{id, is_anomaly}` rows. `predict()` and `predict_report()` (the API entrypoints in [api/fast.py](api/fast.py)) wrap the same recipe with the cached sidecar threshold.
+
+### 11.4 Notebooks for the demo
+
+| Notebook | Role |
+|---|---|
+| [11e-pca_detrended.ipynb](notebooks/11e-pca_detrended.ipynb) | **Source of `pca_fe_46ch.pkl`.** Run with `PRUNE_AGGRESSIVE=True` to reproduce. |
+| [14b-model_eval_fe.ipynb](notebooks/14b-model_eval_fe.ipynb) | Mirror of NB 14, but evaluates the FE model on internal val/test (10.7 M – 14.7 M). Reproduces the sidecar metrics. |
+| [23b-test_slices_fe.ipynb](notebooks/23b-test_slices_fe.ipynb) | Slice picker — chose rows 14.175 M – 14.475 M (rank-1 candidate, 6 events, ~47.6 % density) as the FE demo window. Saves `test_api_fe.npy` / `y_test_api_fe.npy`. |
+| [32-api.ipynb](notebooks/32-api.ipynb) | API showcase — loads the FE artefacts, runs inference over `test_api_fe.npy`, balanced-transition preview around the on/off boundaries, end-to-end ESA F0.5 0.665 / recall 5/6 on the demo slice. |
+
+### 11.5 API integration
+
+[api/fast.py](api/fast.py) caches one prediction over `test_api_fe.npy` at startup using `predict_report(..., n_top_channels=6)`. Cached endpoints:
+
+- `GET /timeline` — `[{id, is_anomaly}]` for all 300 k rows.
+- `GET /predict_by_id?start=..&end=..` — filter the timeline.
+- `GET /report` — row-MSE, per-channel MSE, top contributing channels per window, threshold, anomaly rate.
+- `POST /predict` — score user-supplied rows (must be 46 channels in the order of `target_channels_fe.csv`).
+
+### 11.6 Verification
+
+`scripts/verify_fe46.py` reloads the pickle + sidecar and re-runs internal val/test. Sidecar metrics (val 0.8534, test 0.717 baseline / 0.818 post-filter) should reproduce bit-identically. Run before any FE re-demo.

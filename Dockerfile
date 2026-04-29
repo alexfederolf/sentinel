@@ -28,11 +28,10 @@ COPY api ./api
 # ── Runtime data directories ─────────────────────────────────────────────────
 # These are mounted or populated at runtime (not baked into the image).
 
-
 COPY models ./models
 COPY data/raw/target_channels.csv ./data/raw/target_channels.csv
-COPY data/processed/test_api.npy ./data/processed/test_api.npy
-COPY data/processed/y_test_api.npy ./data/processed/y_test_api.npy
+COPY data/processed/test_api_fe.npy ./data/processed/test_api_fe.npy
+COPY data/processed/y_test_api_fe.npy ./data/processed/y_test_api_fe.npy
 RUN mkdir -p /app/data/raw /app/data/processed /app/models /app/submissions
 
 

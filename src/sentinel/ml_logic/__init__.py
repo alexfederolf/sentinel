@@ -13,6 +13,19 @@ from .data import (
     get_telecommand_cols,
 )
 from .metrics import f05_score, corrected_event_f05
+from .cv import (
+    run_cv,
+    run_sweep,
+    load_cv_data,
+    make_expanding_origin_folds,
+    envr_cols,
+    top_p_mean,
+)
+from .fusion import (
+    event_diagnostics,
+    fusion_diagnostics,
+    format_fusion_report,
+)
 from .preprocessor import (
     create_windows,
     run_preprocessing,

@@ -1,15 +1,20 @@
 """
-SENTINEL Anomaly Detection API
+SENTINEL Anomaly Detection API — FE 46ch detrended PCA pipeline.
 
 Endpoints
 ---------
 GET  /               → health check
-GET  /timeline       → cached labels for the test_api slice
+GET  /timeline       → cached labels for the test_api_fe slice
 GET  /predict_by_id  → filter cached timeline by ID range
-GET  /report         → cached anomaly report (scores, per-channel MSE, top channels per window, threshold)
-POST /predict        → score user-supplied rows using the cached model + scaler
+GET  /report         → cached anomaly report (row scores, per-channel MSE,
+                       top channels per window, threshold)
+POST /predict        → score user-supplied raw 58-channel rows using the
+                       cached FE bundle
 
-All heavy computation runs once at startup and is cached in app.state.
+Heavy work (model + scaler + sidecar load, prediction over the demo slice)
+runs once at startup via the lifespan and is cached on ``app.state``.
+The previous Kaggle-pipeline lifespan + endpoints are kept at the bottom of
+this file, commented out, for reference.
 """
 
 from contextlib import asynccontextmanager
@@ -18,70 +23,60 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from sentinel.ml_logic.data import load_target_channels
-from sentinel.ml_logic.predictor import predict, predict_report
-from sentinel.ml_logic.registry import load_model, load_scaler
-from sentinel.params import PCA_THRESHOLD, PROCESSED_DIR
+from sentinel.ml_logic.predictor import (
+    load_fe46_artefacts,
+    predict_fe46,
+    predict_fe46_report,
+)
+from sentinel.params import PROCESSED_DIR
 
 
-# ── Lifespan: load everything once at startup ────────────────────────────────
+# ── Lifespan: load FE bundle + run cached prediction once at startup ─────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("⏳ Loading model + scaler …")
-    app.state.model     = load_model("pca")
-    app.state.scaler    = load_scaler()
-    app.state.features  = load_target_channels()
-    app.state.threshold = PCA_THRESHOLD
+    print("⏳ Loading FE 46ch detrended PCA bundle …")
+    fe = load_fe46_artefacts()
+    app.state.fe          = fe                      # bundle, spread into predict_fe46(**fe)
+    app.state.model       = fe["model"]
+    app.state.scaler      = fe["scaler"]
+    app.state.features    = fe["features_full"]     # 58ch — POST /predict validates against this
+    app.state.features_fe = fe["features_fe"]       # 46ch — FE inference order
+    app.state.threshold   = fe["threshold"]
 
-    X_api = np.load(PROCESSED_DIR / "test_api_2.npy")
+    X_api = np.load(PROCESSED_DIR / "test_api_fe.npy")
+    y_api = np.load(PROCESSED_DIR / "y_test_api_fe.npy")
+    app.state.y_true = y_api.astype(int).tolist()
 
-    print("⏳ Running cached prediction over test_api slice …")
-    sub = predict(
-        model     = app.state.model,
-        scaler    = app.state.scaler,
-        features  = app.state.features,
-        X_raw     = X_api,
-        threshold = app.state.threshold,
-    )
+    print("⏳ Running cached FE prediction over test_api_fe slice …")
+    sub = predict_fe46(X_raw=X_api, **fe)
     app.state.timeline = sub.astype({"id": int, "is_anomaly": int}).to_dict(orient="records")
     print(f"✅ Timeline cached: {len(app.state.timeline):,} rows")
 
-    print("⏳ Computing report cache …")
-
-
-    rep = predict_report(
-        model     = app.state.model,
-        scaler    = app.state.scaler,
-        features  = app.state.features,
-        X_raw     = X_api,
-        threshold = app.state.threshold,
-        # topk = 6      for LSTM/CNN only (changes scoring!)
-        n_top_channels = 6,   # diagnostic top contributing channels per WINDOW (does not change scoring)
-    )
+    print("⏳ Computing FE report cache …")
+    rep = predict_fe46_report(X_raw=X_api, n_top_channels=6, **fe)
     app.state.report = {
-        # Per-row reconstruction MSE (PCA default = mean over all used channels)
+        # Per-row reconstruction MSE (PCA default = mean over the 46 FE channels,
+        # then score-level rolling-median detrend, broadcast to rows).
         "row_scores"     : rep["row_scores"].tolist(),
 
-        # per-channel overall reconstruction errors (MSE)
-        # sortable by most contributing channel for anomaly detection
+        # Per-channel overall reconstruction errors (MSE), sortable for the
+        # per-channel diagnostic panel in the showcase.
         "per_channel_mse": [
             {"channel": ch, "mse": float(mse)}
             for ch, mse in zip(rep["features"], rep["per_channel_mse"])
         ],
 
-        # TODO: to decide if needed. Other window metrics not used: window_scores, window_channel_mse
-        # OLD naming: topk_channels
-        # Indices of the n_top_channels with the largest MSE PER WINDOW, ranked descending
+        # Indices of the n_top_channels with the largest MSE PER WINDOW,
+        # ranked descending. Diagnostic only — does not affect scoring.
         "window_top_channels": rep["window_top_channels"].tolist(),
 
-        # threshold set by threshold tuning on val set with relevant metric
+        # Threshold from the sidecar (val-tuned on corrected_event_f05).
         "threshold"      : rep["threshold"],
-        # TODO: metric used for tuning (current event F0.5, which makes no sense for current FE)
 
-        # list of all channels used in the model
+        # The 46 FE channels used by the model.
         "features"       : rep["features"],
 
-        # row-based #anomalies & anomaly rate
+        # Row-based #anomalies & anomaly rate (post-filter applied).
         "n_anomalies"    : int((rep["labels"] == 1).sum()),
         "anomaly_rate"   : round(float(rep["labels"].mean()), 4),
     }
@@ -91,7 +86,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="SENTINEL Anomaly Detection",
-    description="ESA satellite telemetry anomaly detector",
+    description="ESA satellite telemetry anomaly detector (FE 46ch detrended PCA pipeline)",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -99,7 +94,7 @@ app = FastAPI(
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 class PredictRequest(BaseModel):
-    """rows: list of rows, each row is a list of N channel values (N = 58)."""
+    """rows: list of rows, each row is a list of N raw channel values (N = 58)."""
     rows: list[list[float]]
 
 
@@ -112,7 +107,7 @@ def root():
 
 @app.get("/timeline")
 def timeline() -> list[dict]:
-    """Cached predictions over the test_api slice. Returns [{id, is_anomaly}]."""
+    """Cached predictions over the test_api_fe slice. Returns [{id, is_anomaly}]."""
     return app.state.timeline
 
 
@@ -124,13 +119,13 @@ def predict_by_id(start: int, end: int) -> list[dict]:
 
 @app.get("/report")
 def report() -> dict:
-    """Cached report: row_scores, per_channel_mse (named), window_top_channels, threshold, features, anomaly_rate."""
+    """Cached report: row_scores, per_channel_mse, window_top_channels, threshold, features, anomaly_rate."""
     return app.state.report
 
 
 @app.post("/predict")
 def predict_endpoint(request: PredictRequest) -> list[dict]:
-    """Score user-supplied rows. Returns [{id, is_anomaly}]."""
+    """Score user-supplied raw 58-channel rows. Returns [{id, is_anomaly}]."""
     if len(request.rows) == 0:
         raise HTTPException(status_code=400, detail="No rows provided")
 
@@ -143,11 +138,87 @@ def predict_endpoint(request: PredictRequest) -> list[dict]:
         )
 
     X_raw = np.array(request.rows, dtype=np.float32)
-    sub = predict(
-        model     = app.state.model,
-        scaler    = app.state.scaler,
-        features  = app.state.features,
-        X_raw     = X_raw,
-        threshold = app.state.threshold,
-    )
+    sub = predict_fe46(X_raw=X_raw, **app.state.fe)
     return sub.astype({"id": int, "is_anomaly": int}).to_dict(orient="records")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Old pipeline (predict / predict_report on the first PCA model).
+# Kept commented out for reference; the FE pipeline above is what the demo
+# runs. To revert: re-enable these imports + the Kaggle lifespan + the
+# Kaggle POST /predict (and disable the FE block above).
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# from sentinel.ml_logic.data import load_target_channels
+# from sentinel.ml_logic.predictor import predict, predict_report
+# from sentinel.ml_logic.registry import load_model, load_scaler
+# from sentinel.params import PCA_THRESHOLD
+#
+# @asynccontextmanager
+# async def lifespan_kaggle(app: FastAPI):
+#     print("⏳ Loading model + scaler …")
+#     app.state.model     = load_model("pca")
+#     app.state.scaler    = load_scaler()
+#     app.state.features  = load_target_channels()
+#     app.state.threshold = PCA_THRESHOLD
+#
+#     X_api = np.load(PROCESSED_DIR / "test_api_fe.npy")
+#     y_api = np.load(PROCESSED_DIR / "y_test_api_fe.npy")
+#     app.state.y_true = y_api.astype(int).tolist()
+#
+#     print("⏳ Running cached prediction over test_api slice …")
+#     sub = predict(
+#         model     = app.state.model,
+#         scaler    = app.state.scaler,
+#         features  = app.state.features,
+#         X_raw     = X_api,
+#         threshold = app.state.threshold,
+#     )
+#     app.state.timeline = sub.astype({"id": int, "is_anomaly": int}).to_dict(orient="records")
+#     print(f"✅ Timeline cached: {len(app.state.timeline):,} rows")
+#
+#     print("⏳ Computing report cache …")
+#     rep = predict_report(
+#         model     = app.state.model,
+#         scaler    = app.state.scaler,
+#         features  = app.state.features,
+#         X_raw     = X_api,
+#         threshold = app.state.threshold,
+#         n_top_channels = 6,
+#     )
+#     app.state.report = {
+#         "row_scores"     : rep["row_scores"].tolist(),
+#         "per_channel_mse": [
+#             {"channel": ch, "mse": float(mse)}
+#             for ch, mse in zip(rep["features"], rep["per_channel_mse"])
+#         ],
+#         "window_top_channels": rep["window_top_channels"].tolist(),
+#         "threshold"      : rep["threshold"],
+#         "features"       : rep["features"],
+#         "n_anomalies"    : int((rep["labels"] == 1).sum()),
+#         "anomaly_rate"   : round(float(rep["labels"].mean()), 4),
+#     }
+#     print("✅ Report cached")
+#     yield
+#
+# # POST /predict (Kaggle pipeline) — replaces the FE version above when reverting.
+# # @app.post("/predict")
+# # def predict_endpoint_kaggle(request: PredictRequest) -> list[dict]:
+# #     if len(request.rows) == 0:
+# #         raise HTTPException(status_code=400, detail="No rows provided")
+# #     n_feat_expected = len(app.state.features)
+# #     n_feat_got      = len(request.rows[0])
+# #     if n_feat_got != n_feat_expected:
+# #         raise HTTPException(
+# #             status_code=400,
+# #             detail=f"Expected {n_feat_expected} features per row, got {n_feat_got}",
+# #         )
+# #     X_raw = np.array(request.rows, dtype=np.float32)
+# #     sub = predict(
+# #         model     = app.state.model,
+# #         scaler    = app.state.scaler,
+# #         features  = app.state.features,
+# #         X_raw     = X_raw,
+# #         threshold = app.state.threshold,
+# #     )
+# #     return sub.astype({"id": int, "is_anomaly": int}).to_dict(orient="records")
