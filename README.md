@@ -12,7 +12,6 @@ Kaggle leaderboard private : **0.915** · public 0.867
 
 **Live demo:** [sentinel-frontend.streamlit.app](https://sentinel-frontend.streamlit.app)
 
-**Reference paper:** Kotowski et al. 2024 — *ESA Benchmark for Anomaly Detection in Satellite Telemetry* ([arXiv:2406.17826](https://arxiv.org/abs/2406.17826))
 
 ---
 
@@ -114,4 +113,3 @@ All paths relative to `notebooks/`. EDA notebooks live in `notebooks/EDA/`.
 | `11d-pca_hybrid_BEST.ipynb` ⭐ | Hybrid: PCA reconstruction + Detrended Envelope Z-Score. Kaggle champion |
 | `11e-pca_detrended_FE.ipynb` | FE model (46-channel detrended PCA) |
 | `32-api.ipynb` | API showcase and diagnostics |
-
