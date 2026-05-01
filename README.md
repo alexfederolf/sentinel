@@ -2,6 +2,9 @@
 
 ESA Spacecraft Telemetry · Anomaly Detection · Mission 1
 
+*Helena Schulz · Alex Federolf · Ekaterina Klemenkova · Christopher Ewen*<br>
+*Le Wagon Data Science & AI Bootcamp — final project, 2026*
+
 **Kaggle Competition:** [ESA-ADB Challenge](https://www.kaggle.com/competitions/esa-adb-challenge)<br>
 Kaggle leaderboard private : **0.915** · public 0.867
 
@@ -111,11 +114,4 @@ All paths relative to `notebooks/`. EDA notebooks live in `notebooks/EDA/`.
 | `11d-pca_hybrid_BEST.ipynb` ⭐ | Hybrid: PCA reconstruction + Detrended Envelope Z-Score. Kaggle champion |
 | `11e-pca_detrended_FE.ipynb` | FE model (46-channel detrended PCA) |
 | `32-api.ipynb` | API showcase and diagnostics |
-
----
-
-## Team
-
-Helena Schulz · Alex Federolf · Ekaterina Klemenkova · Christopher Ewen<br>
-Le Wagon Data Science & AI Bootcamp — final project, 2026
 
