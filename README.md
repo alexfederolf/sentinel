@@ -21,7 +21,7 @@ The ESA-ADB Mission 1 dataset contains 14 years of real spacecraft telemetry - 7
 
 The final model partitions the channel set by drift behavior and runs two specialized detectors in parallel:
 
-**Stream A - PCA Reconstruction.** Operates on the stable spectral channels (41–46). PCA is fit on tail-50k nominal 100-row windows, retaining 95% of explained variance (≈ 183 components). Each window is scored by its reconstruction MSE.
+**Stream A - PCA Reconstruction.** Operates on the stable spectral channels (41–46). PCA is fit on tail-50k nominal 100-row windows, retaining 95% of explained variance. Each window is scored by its reconstruction MSE.
 
 **Stream B - Detrended Envelope Z-Score.** Operates on the drift-affected channels (14, 21, 29). A lower envelope (rolling minimum, window 200) isolates the anomaly-sensitive component; a centered moving-average subtraction (window 5,000) removes the slow baseline. The standardized residual is aggregated row-wise via top-k mean across channels.
 
@@ -76,7 +76,7 @@ make run_api
 # 1. Place the four files in data/raw/
 
 # 2. Preprocess (generates data/processed/kaggle/*.npy)
-make run_preprocess
+make run_preprocess_kaggle
 
 # 3. Run notebooks/11d-pca_hybrid_BEST.ipynb end-to-end
 ```
