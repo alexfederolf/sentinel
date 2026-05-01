@@ -27,13 +27,8 @@ test:
 run_preprocess:
 	python -m sentinel.main preprocess
 
-run_train:
-	python -m sentinel.main train
-
-run_predict:
-	python -m sentinel.main predict
-
-run_all: run_preprocess run_train run_predict
+run_preprocess_kaggle:
+	python -m sentinel.main preprocess_kaggle
 
 #======================#
 #          API         #

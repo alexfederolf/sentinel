@@ -1,8 +1,9 @@
 """
-CLI orchestrator for SENTINEL
+CLI orchestrator for SENTINEL preprocessing pipelines.
 
-JUST PLACEHOLDER
-
+Usage:
+    python -m sentinel.main preprocess          # 3-way split (data/processed/)
+    python -m sentinel.main preprocess_kaggle   # Kaggle split (data/processed/kaggle/)
 """
 
 import argparse
@@ -12,28 +13,27 @@ def preprocess() -> None:
     from .ml_logic.preprocessor import run_preprocessing
     run_preprocessing()
 
-def train() -> None:
-    print("train — not implemented yet")
 
-def predict() -> None:
-    print("predict — not implemented yet")
+def preprocess_kaggle() -> None:
+    from .ml_logic.preprocessor import run_preprocessing_kaggle
+    run_preprocessing_kaggle()
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="sentinel.main",
-        description="SENTINEL pipeline orchestrator",
+        description="SENTINEL preprocessing orchestrator",
     )
     parser.add_argument(
         "command",
-        choices=["preprocess", "train", "predict"],
-        help="pipeline stage to run",
+        choices=["preprocess", "preprocess_kaggle"],
+        help="preprocessing pipeline to run",
     )
     args = parser.parse_args()
 
     commands = {
         "preprocess":        preprocess,
-        "train":             train,
-        "predict":           predict,
+        "preprocess_kaggle": preprocess_kaggle,
     }
     commands[args.command]()
 
