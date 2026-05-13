@@ -234,6 +234,7 @@ def score_report(
     win: int = WINDOW_SIZE,
     batch: int = 256,
     topk: int | None = None,
+    n_top_channels: int | None = None,
 ) -> dict:
     """
     One-pass report: runs the reconstruction once and derives every statistic
@@ -243,22 +244,29 @@ def score_report(
 
     Parameters
     ----------
-    model   : PCA or Keras reconstruction model
-    X_rows  : float32 (n_rows, n_features)
-    win     : window size
-    batch   : Keras batch size
-    topk    : if set, ``window_scores`` / ``row_scores`` use the top-k
-              per-channel MSE rule (see ``score_windows``). ``topk_channels``
-              then holds the indices of the k largest channels per window.
+    model           : PCA or Keras reconstruction model
+    X_rows          : float32 (n_rows, n_features)
+    win             : window size
+    batch           : Keras batch size
+    topk            : score-reduction switch (LSTM/CNN). If set, ``window_scores``
+                      / ``row_scores`` use the top-k per-channel MSE rule
+                      (see ``score_windows``). PCA: leave as None.
+    n_top_channels  : diagnostic only — if set, the output ``window_top_channels``
+                      holds the indices of the N channels with the largest
+                      per-channel MSE per window, ranked descending.
+                      Decoupled from ``topk`` so PCA can return suspect
+                      channels without changing the score reduction.
 
     Returns
     -------
     dict with keys
-        row_scores         : (n_rows,)        float32 — threshold on this
-        window_scores      : (n_win,)         float32
-        per_channel_mse    : (n_feat,)        float32 — mean across all windows
-        window_channel_mse : (n_win, n_feat)  float32 — per-window per-channel
-        topk_channels      : (n_win, topk)    int64 or None (if topk is None)
+        row_scores          : (n_rows,)               float32 — threshold on this
+        window_scores       : (n_win,)                float32
+        per_channel_mse     : (n_feat,)               float32 — mean across all windows
+        window_channel_mse  : (n_win, n_feat)         float32 — per-window per-channel
+        window_top_channels : (n_win, n_top_channels) int64 or None
+                              ranked descending by per-window per-channel MSE
+                              (column 0 = largest MSE)
     """
     X_rows = np.asarray(X_rows, dtype=np.float32)
     n_rows, n_feat = X_rows.shape
@@ -267,11 +275,11 @@ def score_report(
 
     if X_win.shape[0] == 0:
         return {
-            "row_scores"        : np.zeros(n_rows, dtype=np.float32),
-            "window_scores"     : np.zeros(0, dtype=np.float32),
-            "per_channel_mse"   : np.zeros(n_feat, dtype=np.float32),
-            "window_channel_mse": np.zeros((0, n_feat), dtype=np.float32),
-            "topk_channels"     : None,
+            "row_scores"         : np.zeros(n_rows, dtype=np.float32),
+            "window_scores"      : np.zeros(0, dtype=np.float32),
+            "per_channel_mse"    : np.zeros(n_feat, dtype=np.float32),
+            "window_channel_mse" : np.zeros((0, n_feat), dtype=np.float32),
+            "window_top_channels": None,
         }
 
     sq_err = (X_win - X_hat) ** 2                                 # (n_win, win, n_feat)
@@ -280,22 +288,31 @@ def score_report(
     window_scores      = _window_scores_from_sq_err(sq_err, topk=topk)
     row_scores         = broadcast_window_scores_to_rows(window_scores, n_rows, win)
 
-    # topk for LSTM-AE
-    topk_channels = None
-    if topk is not None:
-        # indices of the k largest channels per window (unordered inside the slice)
-        topk_channels = np.argpartition(
-            window_channel_mse, -topk, axis=1
-        )[:, -topk:]
+    # diagnostic top-N channels per window, ranked by reconstruction MSE
+    # (decoupled from score reduction)
+    top_channel_idx = None
+    if n_top_channels is not None:
+        if not 1 <= n_top_channels <= n_feat:
+            raise ValueError(
+                f"n_top_channels must be in [1, {n_feat}], got {n_top_channels}"
+            )
+        # 1) argpartition pulls the N largest per row in O(n_feat)
+        # 2) argsort the N-slice (descending) so column 0 is the largest MSE
+        part = np.argpartition(
+            window_channel_mse, -n_top_channels, axis=1
+        )[:, -n_top_channels:]
+        # gather MSE values, then sort indices by descending MSE
+        mse_part = np.take_along_axis(window_channel_mse, part, axis=1)
+        order    = np.argsort(-mse_part, axis=1)
+        top_channel_idx = np.take_along_axis(part, order, axis=1)
 
     return {
-        "row_scores"        : row_scores,
-        "window_scores"     : window_scores,
-        "per_channel_mse"   : per_channel_mse,
-        "window_channel_mse": window_channel_mse,
-        "topk_channels"     : topk_channels,
+        "row_scores"            : row_scores,
+        "window_scores"         : window_scores,
+        "per_channel_mse"       : per_channel_mse,
+        "window_channel_mse"    : window_channel_mse,
+        "window_top_channels"   : top_channel_idx,
     }
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Drift detrending for score arrays
@@ -456,3 +473,81 @@ def score_windows_detrended(
         win_scores, n_rows=X_rows.shape[0],
         window=detrend_window, mode=detrend_mode, win=win,
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Prediction post-processing — block-length filter
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Recall-tuned thresholds (e.g. NB 31's nom_p95) generate many short isolated
+# predicted blocks where the score grazes the threshold inside nominal regions.
+# Real ESA-ADB events are typically hundreds-to-thousands of rows long, so two
+# simple post-processing rules clean up the timeline without losing recall:
+#
+#   1. Merge predicted blocks separated by short gaps (≤ ``max_gap`` rows).
+#   2. Drop predicted blocks shorter than ``min_len`` rows.
+#
+# Used by the FE pipeline (NB 22c) to turn a 100k-FP-row scatter into a
+# small number of clean event blocks.
+
+def clean_predictions(
+    y_pred: np.ndarray,
+    min_len: int = 500,
+    max_gap: int = 0,
+) -> np.ndarray:
+    """
+    Post-process a binary prediction array: merge near-adjacent blocks,
+    then drop blocks shorter than ``min_len``.
+
+    Parameters
+    ----------
+    y_pred : (n_rows,) array of 0/1
+        Row-level predicted labels (e.g. from ``score > threshold``).
+    min_len : int, default 500
+        Minimum predicted-block length in rows. Anything shorter is zeroed.
+        Must be >= 1.
+    max_gap : int, default 0
+        If > 0, runs of zeros up to ``max_gap`` rows long that sit *between*
+        two predicted-positive runs are filled with 1s before the min-length
+        filter is applied. Useful when a single event is split into two
+        predicted blocks by a brief score dip below threshold.
+
+    Returns
+    -------
+    (n_rows,) int8 array — cleaned labels.
+
+    Notes
+    -----
+    Operates only on the prediction array, not on the underlying scores or
+    ground truth. Idempotent for ``max_gap=0`` only — gap-filling is a
+    one-shot operation; running it twice with the same gap is the same as
+    running it once.
+    """
+    y = np.asarray(y_pred, dtype=np.int8).copy()
+    if y.ndim != 1:
+        raise ValueError(f"y_pred must be 1D, got shape {y.shape}")
+    if min_len < 1:
+        raise ValueError(f"min_len must be >= 1, got {min_len}")
+    if max_gap < 0:
+        raise ValueError(f"max_gap must be >= 0, got {max_gap}")
+
+    # Step 1 — fill short gaps between predicted-positive runs.
+    if max_gap > 0:
+        padded = np.concatenate(([1], y, [1]))      # treat the array boundaries as positive
+        d      = np.diff(padded.astype(np.int8))
+        gap_starts = np.where(d == -1)[0]            # 1 → 0 transitions in padded
+        gap_ends   = np.where(d ==  1)[0] - 1        # 0 → 1 transitions in padded
+        for s, e in zip(gap_starts, gap_ends):
+            if 1 <= s and e <= len(y) - 2 and (e - s + 1) <= max_gap:
+                y[s:e + 1] = 1
+
+    # Step 2 — drop predicted-positive runs shorter than min_len.
+    padded = np.concatenate(([0], y, [0]))
+    d      = np.diff(padded.astype(np.int8))
+    starts = np.where(d ==  1)[0]
+    ends   = np.where(d == -1)[0] - 1
+    for s, e in zip(starts, ends):
+        if (e - s + 1) < min_len:
+            y[s:e + 1] = 0
+
+    return y

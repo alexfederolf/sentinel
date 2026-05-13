@@ -168,13 +168,13 @@ def test_score_report_keys_and_shapes_pca():
 
     assert set(out) == {
         "row_scores", "window_scores", "per_channel_mse",
-        "window_channel_mse", "topk_channels",
+        "window_channel_mse", "window_top_channels",
     }
     assert out["row_scores"].shape         == (n_win * win,)
     assert out["window_scores"].shape      == (n_win,)
     assert out["per_channel_mse"].shape    == (n_feat,)
     assert out["window_channel_mse"].shape == (n_win, n_feat)
-    assert out["topk_channels"] is None
+    assert out["window_top_channels"] is None
 
     # Dtypes
     assert out["row_scores"].dtype         == np.float32
@@ -212,7 +212,7 @@ def test_score_report_per_channel_mse_is_mean_over_windows():
     assert np.allclose(out["per_channel_mse"], expected, atol=1e-6)
 
 
-def test_score_report_topk_channels_pick_largest():
+def test_score_report_window_top_channels_pick_largest():
     rng = np.random.default_rng(13)
     win, n_feat, n_win = 10, 5, 4
     X_rows = rng.normal(size=(n_win * win, n_feat)).astype(np.float32)
@@ -220,14 +220,17 @@ def test_score_report_topk_channels_pick_largest():
         X_rows.reshape(n_win, win * n_feat)
     )
 
-    out = score_report(pca, X_rows, win=win, topk=2)
+    out = score_report(pca, X_rows, win=win, n_top_channels=2)
 
-    assert out["topk_channels"].shape == (n_win, 2)
-    # Each picked index must be among the two largest per-channel MSEs.
+    assert out["window_top_channels"].shape == (n_win, 2)
+    # Each picked index must be among the two largest per-channel MSEs,
+    # and ranked descending: column 0 is the channel with the largest MSE.
     for i in range(n_win):
         ranked = np.argsort(out["window_channel_mse"][i])[::-1]
-        top2   = set(ranked[:2])
-        assert set(out["topk_channels"][i].tolist()) == top2
+        top2   = set(ranked[:2].tolist())
+        picked = out["window_top_channels"][i].tolist()
+        assert set(picked) == top2
+        assert picked[0] == int(ranked[0])
 
 
 def test_score_report_short_input_returns_zeros():
@@ -244,7 +247,7 @@ def test_score_report_short_input_returns_zeros():
     assert out["window_scores"].shape      == (0,)
     assert out["per_channel_mse"].shape    == (3,)
     assert out["window_channel_mse"].shape == (0, 3)
-    assert out["topk_channels"] is None
+    assert out["window_top_channels"] is None
 
 
 def test_score_report_with_keras_like_model():
