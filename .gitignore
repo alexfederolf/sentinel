@@ -71,3 +71,4 @@ reports/
 notebooks/cache/
 .envrc
 .env.yaml
+.claude/
